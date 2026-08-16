@@ -69,8 +69,10 @@ export default function ChatsScreen() {
       if (userError || !user) {
         Alert.alert(
           'Not signed in',
-          'Project Delivered could not find your account session.'
+          'Please sign in again.'
         );
+
+        router.replace('/sign-up');
         return;
       }
 
@@ -358,15 +360,11 @@ export default function ChatsScreen() {
                 ).getTime()
               : 0;
 
-          return (
-            bTime - aTime
-          );
+          return bTime - aTime;
         }
       );
 
-      setChats(
-        chatItems
-      );
+      setChats(chatItems);
     } catch (error) {
       console.error(
         'Load chats error:',
