@@ -15,6 +15,10 @@ import {
   useLocalSearchParams,
 } from 'expo-router';
 import {
+  useVideoPlayer,
+  VideoView,
+} from 'expo-video';
+import {
   useEffect,
   useMemo,
   useRef,
@@ -211,6 +215,40 @@ function VoiceMessagePlayer({
         </Text>
       </View>
     </Pressable>
+  );
+}
+
+
+function VideoMessagePlayer({
+  url,
+}: {
+  url: string;
+}) {
+  const player =
+    useVideoPlayer(
+      url,
+      (videoPlayer) => {
+        videoPlayer.loop = false;
+      }
+    );
+
+  return (
+    <View
+      style={
+        styles.videoCard
+      }
+    >
+      <VideoView
+        player={
+          player
+        }
+        style={
+          styles.inlineVideo
+        }
+        nativeControls
+        contentFit="cover"
+      />
+    </View>
   );
 }
 
@@ -2574,6 +2612,11 @@ export default function ConversationScreen() {
                   'audio/'
                 ) ?? false;
 
+              const isVideo =
+                item.attachment_type?.startsWith(
+                  'video/'
+                ) ?? false;
+
               const shouldShowBody =
                 !!item.body &&
                 !(
@@ -2663,6 +2706,16 @@ export default function ConversationScreen() {
                       )}
 
                     {item.attachment_path &&
+                      isVideo &&
+                      attachmentUrl && (
+                        <VideoMessagePlayer
+                          url={
+                            attachmentUrl
+                          }
+                        />
+                      )}
+
+                    {item.attachment_path &&
                       isAudio &&
                       attachmentUrl && (
                         <VoiceMessagePlayer
@@ -2677,7 +2730,8 @@ export default function ConversationScreen() {
 
                     {item.attachment_path &&
                       !isImage &&
-                      !isAudio && (
+                      !isAudio &&
+                      !isVideo && (
                         <Pressable
                           style={
                             sentByMe
@@ -3711,6 +3765,21 @@ const styles =
 
     microphoneButtonTextRecording: {
       color: '#D92D20',
+    },
+
+    videoCard: {
+      width: 250,
+      height: 180,
+      borderRadius: 16,
+      overflow: 'hidden',
+      backgroundColor:
+        '#000000',
+      marginBottom: 5,
+    },
+
+    inlineVideo: {
+      width: '100%',
+      height: '100%',
     },
 
     receivedVoiceCard: {
