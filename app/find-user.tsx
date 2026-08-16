@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import {
     ActivityIndicator,
@@ -21,13 +21,27 @@ type Profile = {
 };
 
 export default function FindUserScreen() {
+  const {
+    mode,
+    conversationId,
+  } = useLocalSearchParams<{
+    mode?: string;
+    conversationId?: string;
+  }>();
+
+  const addingToGroup =
+    mode === 'add-to-group' &&
+    !!conversationId;
+
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
-  const [startingChat, setStartingChat] = useState<string | null>(null);
+  const [workingUserId, setWorkingUserId] =
+    useState<string | null>(null);
 
   const searchUsers = async () => {
-    const cleanQuery = query.trim().toLowerCase();
+    const cleanQuery =
+      query.trim().toLowerCase();
 
     if (cleanQuery.length < 2) {
       Alert.alert(
@@ -53,11 +67,17 @@ export default function FindUserScreen() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, display_name, username')
-        .ilike('username', `%${cleanQuery}%`)
-        .limit(20);
+      const { data, error } =
+        await supabase
+          .from('profiles')
+          .select(
+            'id, display_name, username'
+          )
+          .ilike(
+            'username',
+            `%${cleanQuery}%`
+          )
+          .limit(20);
 
       if (error) {
         Alert.alert(
@@ -67,14 +87,60 @@ export default function FindUserScreen() {
         return;
       }
 
-      const filtered =
+      let filtered =
         (data ?? []).filter(
-          (profile) => profile.id !== user.id
+          (profile) =>
+            profile.id !== user.id
         );
+
+      if (
+        addingToGroup &&
+        conversationId
+      ) {
+        const {
+          data: existingMembers,
+          error: membersError,
+        } = await supabase
+          .from(
+            'conversation_members'
+          )
+          .select('user_id')
+          .eq(
+            'conversation_id',
+            conversationId
+          );
+
+        if (membersError) {
+          Alert.alert(
+            'Unable to check members',
+            membersError.message
+          );
+          return;
+        }
+
+        const existingIds =
+          new Set(
+            (existingMembers ?? []).map(
+              (member) =>
+                member.user_id
+            )
+          );
+
+        filtered =
+          filtered.filter(
+            (profile) =>
+              !existingIds.has(
+                profile.id
+              )
+          );
+      }
 
       setResults(filtered);
     } catch (error) {
-      console.error('User search error:', error);
+      console.error(
+        'User search error:',
+        error
+      );
 
       Alert.alert(
         'Search failed',
@@ -85,163 +151,355 @@ export default function FindUserScreen() {
     }
   };
 
-  const startConversation = async (
-    profile: Profile
-  ) => {
-    try {
-      setStartingChat(profile.id);
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        Alert.alert(
-          'Not signed in',
-          'Please sign in again.'
+  const startConversation =
+    async (
+      profile: Profile
+    ) => {
+      try {
+        setWorkingUserId(
+          profile.id
         );
-        return;
-      }
 
-      //
-      // Create the conversation.
-      //
-      const {
-        data: conversation,
-        error: conversationError,
-      } = await supabase
-        .from('conversations')
-        .insert({
-          title: profile.display_name,
-          is_group: false,
-          created_by: user.id,
-        })
-        .select('id')
-        .single();
+        const {
+          data: { user },
+          error: userError,
+        } =
+          await supabase.auth.getUser();
 
-      if (conversationError || !conversation) {
+        if (
+          userError ||
+          !user
+        ) {
+          Alert.alert(
+            'Not signed in',
+            'Please sign in again.'
+          );
+          return;
+        }
+
+        const {
+          data: conversation,
+          error:
+            conversationError,
+        } = await supabase
+          .from(
+            'conversations'
+          )
+          .insert({
+            title:
+              profile.display_name,
+            is_group: false,
+            created_by:
+              user.id,
+          })
+          .select('id')
+          .single();
+
+        if (
+          conversationError ||
+          !conversation
+        ) {
+          Alert.alert(
+            'Unable to start conversation',
+            conversationError?.message ??
+              'The conversation could not be created.'
+          );
+          return;
+        }
+
+        const {
+          error: ownerError,
+        } = await supabase
+          .from(
+            'conversation_members'
+          )
+          .insert({
+            conversation_id:
+              conversation.id,
+            user_id:
+              user.id,
+            role: 'owner',
+          });
+
+        if (ownerError) {
+          Alert.alert(
+            'Unable to start conversation',
+            ownerError.message
+          );
+          return;
+        }
+
+        const {
+          error: memberError,
+        } = await supabase
+          .from(
+            'conversation_members'
+          )
+          .insert({
+            conversation_id:
+              conversation.id,
+            user_id:
+              profile.id,
+            role: 'member',
+          });
+
+        if (memberError) {
+          Alert.alert(
+            'Unable to add user',
+            memberError.message
+          );
+          return;
+        }
+
+        router.replace({
+          pathname:
+            '/conversation',
+          params: {
+            conversationId:
+              conversation.id,
+          },
+        });
+      } catch (error) {
+        console.error(
+          'Start conversation error:',
+          error
+        );
+
         Alert.alert(
           'Unable to start conversation',
-          conversationError?.message ??
-            'The conversation could not be created.'
+          'Please try again.'
         );
+      } finally {
+        setWorkingUserId(
+          null
+        );
+      }
+    };
+
+  const addToGroup =
+    async (
+      profile: Profile
+    ) => {
+      if (!conversationId) {
         return;
       }
 
-      //
-      // Add the current user first.
-      //
-      const { error: ownerError } = await supabase
-        .from('conversation_members')
-        .insert({
-          conversation_id: conversation.id,
-          user_id: user.id,
-          role: 'owner',
-        });
+      try {
+        setWorkingUserId(
+          profile.id
+        );
 
-      if (ownerError) {
+        const {
+          data: { user },
+          error: userError,
+        } =
+          await supabase.auth.getUser();
+
+        if (
+          userError ||
+          !user
+        ) {
+          Alert.alert(
+            'Not signed in',
+            'Please sign in again.'
+          );
+          return;
+        }
+
+        const {
+          data: conversation,
+          error:
+            conversationError,
+        } = await supabase
+          .from(
+            'conversations'
+          )
+          .select(
+            'created_by, is_group'
+          )
+          .eq(
+            'id',
+            conversationId
+          )
+          .single();
+
+        if (
+          conversationError ||
+          !conversation
+        ) {
+          Alert.alert(
+            'Unable to load group',
+            conversationError?.message ??
+              'Group not found.'
+          );
+          return;
+        }
+
+        if (
+          !conversation.is_group
+        ) {
+          Alert.alert(
+            'Not a group',
+            'This conversation is not a group chat.'
+          );
+          return;
+        }
+
+        if (
+          conversation.created_by !==
+          user.id
+        ) {
+          Alert.alert(
+            'Owner only',
+            'Only the group owner can add members.'
+          );
+          return;
+        }
+
+        const {
+          error: memberError,
+        } = await supabase
+          .from(
+            'conversation_members'
+          )
+          .insert({
+            conversation_id:
+              conversationId,
+            user_id:
+              profile.id,
+            role: 'member',
+          });
+
+        if (memberError) {
+          Alert.alert(
+            'Unable to add member',
+            memberError.message
+          );
+          return;
+        }
+
+        Alert.alert(
+          'Member added',
+          `${profile.display_name} was added to the group.`,
+          [
+            {
+              text: 'OK',
+              onPress: () =>
+                router.back(),
+            },
+          ]
+        );
+      } catch (error) {
         console.error(
-          'Owner membership error:',
-          ownerError
+          'Add member error:',
+          error
         );
 
         Alert.alert(
-          'Unable to start conversation',
-          ownerError.message
+          'Unable to add member',
+          'Please try again.'
         );
-        return;
+      } finally {
+        setWorkingUserId(
+          null
+        );
       }
+    };
 
-      //
-      // Add the person we searched for.
-      //
-      const { error: memberError } = await supabase
-        .from('conversation_members')
-        .insert({
-          conversation_id: conversation.id,
-          user_id: profile.id,
-          role: 'member',
-        });
-
-      if (memberError) {
-        console.error(
-          'Second membership error:',
-          memberError
+  const handleUserPress =
+    (
+      profile: Profile
+    ) => {
+      if (addingToGroup) {
+        addToGroup(profile);
+      } else {
+        startConversation(
+          profile
         );
-
-        Alert.alert(
-          'Unable to add user',
-          memberError.message
-        );
-        return;
       }
-
-      //
-      // Open the new conversation.
-      //
-      router.replace({
-        pathname: '/conversation',
-        params: {
-          conversationId: conversation.id,
-        },
-      });
-    } catch (error) {
-      console.error(
-        'Start conversation error:',
-        error
-      );
-
-      Alert.alert(
-        'Unable to start conversation',
-        'Please try again.'
-      );
-    } finally {
-      setStartingChat(null);
-    }
-  };
+    };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View style={styles.header}>
+    <SafeAreaView
+      style={styles.safeArea}
+    >
+      <View
+        style={styles.container}
+      >
+        <View
+          style={styles.header}
+        >
           <Pressable
-            style={styles.backButton}
-            onPress={() => router.back()}
+            style={
+              styles.backButton
+            }
+            onPress={() =>
+              router.back()
+            }
           >
-            <Text style={styles.backText}>
+            <Text
+              style={
+                styles.backText
+              }
+            >
               ‹
             </Text>
           </Pressable>
 
-          <Text style={styles.title}>
-            Find User
+          <Text
+            style={styles.title}
+          >
+            {addingToGroup
+              ? 'Add Member'
+              : 'Find User'}
           </Text>
         </View>
 
-        <Text style={styles.subtitle}>
-          Search by Project Delivered username.
+        <Text
+          style={styles.subtitle}
+        >
+          {addingToGroup
+            ? 'Search for someone to add to this group.'
+            : 'Search by Project Delivered username.'}
         </Text>
 
-        <View style={styles.searchRow}>
+        <View
+          style={
+            styles.searchRow
+          }
+        >
           <TextInput
             value={query}
-            onChangeText={setQuery}
+            onChangeText={
+              setQuery
+            }
             placeholder="Username"
             placeholderTextColor="#98A2B3"
             style={styles.input}
             autoCapitalize="none"
             autoCorrect={false}
             returnKeyType="search"
-            onSubmitEditing={searchUsers}
+            onSubmitEditing={
+              searchUsers
+            }
           />
 
           <Pressable
-            style={styles.searchButton}
-            onPress={searchUsers}
-            disabled={searching}
+            style={
+              styles.searchButton
+            }
+            onPress={
+              searchUsers
+            }
+            disabled={
+              searching
+            }
           >
-            <Text style={styles.searchButtonText}>
+            <Text
+              style={
+                styles.searchButtonText
+              }
+            >
               Search
             </Text>
           </Pressable>
@@ -256,55 +514,101 @@ export default function FindUserScreen() {
         ) : (
           <FlatList
             data={results}
-            keyExtractor={(item) => item.id}
+            keyExtractor={(
+              item
+            ) => item.id}
             contentContainerStyle={
               results.length === 0
                 ? styles.emptyList
                 : undefined
             }
             ListEmptyComponent={
-              <Text style={styles.emptyText}>
-                No users to show yet.
+              <Text
+                style={
+                  styles.emptyText
+                }
+              >
+                {addingToGroup
+                  ? 'No available users to add.'
+                  : 'No users to show yet.'}
               </Text>
             }
-            renderItem={({ item }) => {
-              const isStarting =
-                startingChat === item.id;
+            renderItem={({
+              item,
+            }) => {
+              const working =
+                workingUserId ===
+                item.id;
 
               return (
                 <Pressable
-                  style={styles.result}
-                  disabled={startingChat !== null}
+                  style={
+                    styles.result
+                  }
+                  disabled={
+                    workingUserId !==
+                    null
+                  }
                   onPress={() =>
-                    startConversation(item)
+                    handleUserPress(
+                      item
+                    )
                   }
                 >
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>
+                  <View
+                    style={
+                      styles.avatar
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.avatarText
+                      }
+                    >
                       {item.display_name
                         .charAt(0)
                         .toUpperCase()}
                     </Text>
                   </View>
 
-                  <View style={styles.userDetails}>
-                    <Text style={styles.displayName}>
-                      {item.display_name}
+                  <View
+                    style={
+                      styles.userDetails
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.displayName
+                      }
+                    >
+                      {
+                        item.display_name
+                      }
                     </Text>
 
-                    <Text style={styles.username}>
+                    <Text
+                      style={
+                        styles.username
+                      }
+                    >
                       @{item.username}
                     </Text>
                   </View>
 
-                  {isStarting ? (
+                  {working ? (
                     <ActivityIndicator
                       size="small"
                       color="#4169E1"
                     />
                   ) : (
-                    <Text style={styles.chevron}>
-                      ›
+                    <Text
+                      style={
+                        styles.actionLabel
+                      }
+                    >
+                      {addingToGroup
+                        ? 'Add'
+                        : '›'}
                     </Text>
                   )}
                 </Pressable>
@@ -317,137 +621,148 @@ export default function FindUserScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F7F8FA',
-  },
+const styles =
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor:
+        '#F7F8FA',
+    },
 
-  container: {
-    flex: 1,
-    paddingHorizontal: 22,
-    paddingTop: 18,
-  },
+    container: {
+      flex: 1,
+      paddingHorizontal: 22,
+      paddingTop: 18,
+    },
 
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
 
-  backButton: {
-    width: 36,
-    marginRight: 6,
-  },
+    backButton: {
+      width: 36,
+      marginRight: 6,
+    },
 
-  backText: {
-    fontSize: 38,
-    lineHeight: 40,
-    color: '#4169E1',
-  },
+    backText: {
+      fontSize: 38,
+      lineHeight: 40,
+      color: '#4169E1',
+    },
 
-  title: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#101828',
-  },
+    title: {
+      fontSize: 32,
+      fontWeight: '800',
+      color: '#101828',
+    },
 
-  subtitle: {
-    fontSize: 16,
-    lineHeight: 23,
-    color: '#667085',
-    marginBottom: 22,
-  },
+    subtitle: {
+      fontSize: 16,
+      lineHeight: 23,
+      color: '#667085',
+      marginBottom: 22,
+    },
 
-  searchRow: {
-    flexDirection: 'row',
-    marginBottom: 24,
-  },
+    searchRow: {
+      flexDirection: 'row',
+      marginBottom: 24,
+    },
 
-  input: {
-    flex: 1,
-    height: 50,
-    borderWidth: 1,
-    borderColor: '#D0D5DD',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    fontSize: 16,
-    color: '#101828',
-    backgroundColor: '#FFFFFF',
-  },
+    input: {
+      flex: 1,
+      height: 50,
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      fontSize: 16,
+      color: '#101828',
+      backgroundColor:
+        '#FFFFFF',
+    },
 
-  searchButton: {
-    marginLeft: 10,
-    paddingHorizontal: 18,
-    borderRadius: 12,
-    backgroundColor: '#4169E1',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+    searchButton: {
+      marginLeft: 10,
+      paddingHorizontal: 18,
+      borderRadius: 12,
+      backgroundColor:
+        '#4169E1',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+    },
 
-  searchButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+    searchButtonText: {
+      color: '#FFFFFF',
+      fontSize: 15,
+      fontWeight: '700',
+    },
 
-  loader: {
-    marginTop: 30,
-  },
+    loader: {
+      marginTop: 30,
+    },
 
-  emptyList: {
-    flexGrow: 1,
-    justifyContent: 'center',
-  },
+    emptyList: {
+      flexGrow: 1,
+      justifyContent:
+        'center',
+    },
 
-  emptyText: {
-    textAlign: 'center',
-    fontSize: 15,
-    color: '#98A2B3',
-  },
+    emptyText: {
+      textAlign: 'center',
+      fontSize: 15,
+      color: '#98A2B3',
+    },
 
-  result: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EAECF0',
-  },
+    result: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor:
+        '#EAECF0',
+    },
 
-  avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#E8ECFB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
+    avatar: {
+      width: 50,
+      height: 50,
+      borderRadius: 25,
+      backgroundColor:
+        '#E8ECFB',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginRight: 14,
+    },
 
-  avatarText: {
-    fontSize: 19,
-    fontWeight: '700',
-    color: '#4169E1',
-  },
+    avatarText: {
+      fontSize: 19,
+      fontWeight: '700',
+      color: '#4169E1',
+    },
 
-  userDetails: {
-    flex: 1,
-  },
+    userDetails: {
+      flex: 1,
+    },
 
-  displayName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#101828',
-  },
+    displayName: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: '#101828',
+    },
 
-  username: {
-    marginTop: 3,
-    fontSize: 14,
-    color: '#667085',
-  },
+    username: {
+      marginTop: 3,
+      fontSize: 14,
+      color: '#667085',
+    },
 
-  chevron: {
-    fontSize: 28,
-    color: '#98A2B3',
-  },
-});
+    actionLabel: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: '#4169E1',
+    },
+  });
