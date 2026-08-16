@@ -60,6 +60,9 @@ export default function ConversationScreen() {
   const [conversationTitle, setConversationTitle] =
     useState('Conversation');
 
+  const [isGroup, setIsGroup] =
+    useState(false);
+
   const [readMap, setReadMap] =
     useState<ReadMap>({});
 
@@ -234,7 +237,11 @@ export default function ConversationScreen() {
       }
 
       if (conversation) {
+        setIsGroup(conversation.is_group);
+
         if (conversation.is_group) {
+          setOtherUser(null);
+
           setConversationTitle(
             conversation.title ??
               'Group Conversation'
@@ -1018,6 +1025,24 @@ export default function ConversationScreen() {
       );
     };
 
+  const openConversationDetails =
+    () => {
+      if (
+        !isGroup ||
+        !conversationId
+      ) {
+        return;
+      }
+
+      router.push({
+        pathname:
+          '/group-details',
+        params: {
+          conversationId,
+        },
+      });
+    };
+
   const formatTime =
     (
       timestamp: string
@@ -1064,41 +1089,72 @@ export default function ConversationScreen() {
             </Text>
           </Pressable>
 
-          <View
-            style={styles.avatar}
-          >
-            <Text
-              style={
-                styles.avatarText
-              }
-            >
-              {conversationTitle
-                .charAt(0)
-                .toUpperCase()}
-            </Text>
-          </View>
-
-          <View
-            style={
-              styles.headerText
+          <Pressable
+            disabled={!isGroup}
+            onPress={
+              openConversationDetails
             }
+            style={[
+              styles.headerProfile,
+              isGroup &&
+                styles.headerProfilePressable,
+            ]}
           >
-            <Text
-              style={styles.name}
+            <View
+              style={styles.avatar}
             >
-              {conversationTitle}
-            </Text>
+              <Text
+                style={
+                  styles.avatarText
+                }
+              >
+                {conversationTitle
+                  .charAt(0)
+                  .toUpperCase()}
+              </Text>
+            </View>
 
-            <Text
+            <View
               style={
-                styles.status
+                styles.headerText
               }
             >
-              {otherUser
-                ? `@${otherUser.username}`
-                : 'Live'}
-            </Text>
-          </View>
+              <View
+                style={
+                  styles.headerTitleRow
+                }
+              >
+                <Text
+                  style={styles.name}
+                  numberOfLines={1}
+                >
+                  {conversationTitle}
+                </Text>
+
+                {isGroup && (
+                  <Text
+                    style={
+                      styles.detailsChevron
+                    }
+                  >
+                    ›
+                  </Text>
+                )}
+              </View>
+
+              <Text
+                style={
+                  styles.status
+                }
+              >
+                {isGroup
+                  ? 'Tap for group details'
+                  : otherUser
+                    ? `@${otherUser.username}`
+                    : 'Live'}
+              </Text>
+            </View>
+          </Pressable>
         </View>
 
         {loading ? (
@@ -1409,6 +1465,16 @@ const styles =
       color: '#4169E1',
     },
 
+    headerProfile: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+    headerProfilePressable: {
+      paddingVertical: 5,
+    },
+
     avatar: {
       width: 42,
       height: 42,
@@ -1431,10 +1497,23 @@ const styles =
       flex: 1,
     },
 
+    headerTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
     name: {
+      flexShrink: 1,
       fontSize: 17,
       fontWeight: '700',
       color: '#101828',
+    },
+
+    detailsChevron: {
+      marginLeft: 6,
+      fontSize: 21,
+      lineHeight: 22,
+      color: '#98A2B3',
     },
 
     status: {

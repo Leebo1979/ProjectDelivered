@@ -22,6 +22,7 @@ export default function RootLayout() {
         <Stack.Screen name="conversation" />
         <Stack.Screen name="find-user" />
         <Stack.Screen name="create-group" />
+        <Stack.Screen name="group-details" />
         <Stack.Screen name="favourites" />
 
         <Stack.Screen name="modal" />
