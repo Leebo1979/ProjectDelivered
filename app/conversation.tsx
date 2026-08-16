@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -31,11 +31,66 @@ export default function ConversationScreen() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] =
+    useState<string | null>(null);
+
+  const listRef = useRef<FlatList<Message>>(null);
 
   useEffect(() => {
+    if (!conversationId) {
+      return;
+    }
+
     loadConversation();
+
+    const channel = supabase
+      .channel(`conversation:${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as Message;
+
+          setMessages((currentMessages) => {
+            const alreadyExists = currentMessages.some(
+              (item) => item.id === newMessage.id
+            );
+
+            if (alreadyExists) {
+              return currentMessages;
+            }
+
+            return [...currentMessages, newMessage];
+          });
+        }
+      )
+      .subscribe((status) => {
+        console.log('Realtime status:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [conversationId]);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToEnd({
+        animated: true,
+      });
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [messages]);
 
   const loadConversation = async () => {
     try {
@@ -47,7 +102,10 @@ export default function ConversationScreen() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        console.error('User load error:', userError);
+        console.error(
+          'User load error:',
+          userError
+        );
         return;
       }
 
@@ -55,17 +113,32 @@ export default function ConversationScreen() {
 
       const { data, error } = await supabase
         .from('messages')
-        .select('id, body, sender_id, created_at')
-        .eq('conversation_id', conversationId)
+        .select(
+          'id, body, sender_id, created_at'
+        )
+        .eq(
+          'conversation_id',
+          conversationId
+        )
         .is('deleted_at', null)
-        .order('created_at', { ascending: true });
+        .order('created_at', {
+          ascending: true,
+        });
 
       if (error) {
-        console.error('Message load error:', error);
+        console.error(
+          'Message load error:',
+          error
+        );
         return;
       }
 
       setMessages(data ?? []);
+    } catch (error) {
+      console.error(
+        'Conversation load error:',
+        error
+      );
     } finally {
       setLoading(false);
     }
@@ -74,7 +147,12 @@ export default function ConversationScreen() {
   const sendMessage = async () => {
     const trimmedMessage = message.trim();
 
-    if (!trimmedMessage || !currentUserId || !conversationId) {
+    if (
+      !trimmedMessage ||
+      !currentUserId ||
+      !conversationId ||
+      sending
+    ) {
       return;
     }
 
@@ -88,23 +166,52 @@ export default function ConversationScreen() {
           sender_id: currentUserId,
           body: trimmedMessage,
         })
-        .select('id, body, sender_id, created_at')
+        .select(
+          'id, body, sender_id, created_at'
+        )
         .single();
 
       if (error || !data) {
-        console.error('Send message error:', error);
+        console.error(
+          'Send message error:',
+          error
+        );
         return;
       }
 
-      setMessages((current) => [...current, data]);
+      // Add immediately on this device.
+      // The realtime listener also receives it,
+      // but our duplicate check prevents two copies.
+      setMessages((currentMessages) => {
+        const alreadyExists =
+          currentMessages.some(
+            (item) => item.id === data.id
+          );
+
+        if (alreadyExists) {
+          return currentMessages;
+        }
+
+        return [...currentMessages, data];
+      });
+
       setMessage('');
+    } catch (error) {
+      console.error(
+        'Send message error:',
+        error
+      );
     } finally {
       setSending(false);
     }
   };
 
-  const formatTime = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString([], {
+  const formatTime = (
+    timestamp: string
+  ) => {
+    return new Date(
+      timestamp
+    ).toLocaleTimeString([], {
       hour: 'numeric',
       minute: '2-digit',
     });
@@ -114,28 +221,43 @@ export default function ConversationScreen() {
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
         style={styles.screen}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={
+          Platform.OS === 'ios'
+            ? 'padding'
+            : undefined
+        }
       >
         <View style={styles.header}>
           <Pressable
             style={styles.backButton}
             onPress={() => router.back()}
           >
-            <Text style={styles.backText}>‹</Text>
+            <Text style={styles.backText}>
+              ‹
+            </Text>
           </Pressable>
 
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>T</Text>
+            <Text style={styles.avatarText}>
+              T
+            </Text>
           </View>
 
           <View style={styles.headerText}>
-            <Text style={styles.name}>Test Conversation</Text>
-            <Text style={styles.status}>Project Delivered</Text>
+            <Text style={styles.name}>
+              Test Conversation
+            </Text>
+
+            <Text style={styles.status}>
+              Live
+            </Text>
           </View>
         </View>
 
         {loading ? (
-          <View style={styles.loaderContainer}>
+          <View
+            style={styles.loaderContainer}
+          >
             <ActivityIndicator
               size="large"
               color="#4169E1"
@@ -143,12 +265,23 @@ export default function ConversationScreen() {
           </View>
         ) : (
           <FlatList
+            ref={listRef}
             data={messages}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.messageList}
+            keyExtractor={(item) =>
+              item.id
+            }
+            contentContainerStyle={
+              styles.messageList
+            }
+            onContentSizeChange={() =>
+              listRef.current?.scrollToEnd({
+                animated: false,
+              })
+            }
             renderItem={({ item }) => {
               const sentByMe =
-                item.sender_id === currentUserId;
+                item.sender_id ===
+                currentUserId;
 
               return (
                 <View
@@ -183,9 +316,17 @@ export default function ConversationScreen() {
                       </Text>
                     </View>
 
-                    <Text style={styles.timestamp}>
-                      {sentByMe ? 'Sent ' : ''}
-                      {formatTime(item.created_at)}
+                    <Text
+                      style={
+                        styles.timestamp
+                      }
+                    >
+                      {sentByMe
+                        ? 'Sent '
+                        : ''}
+                      {formatTime(
+                        item.created_at
+                      )}
                     </Text>
                   </View>
                 </View>
@@ -205,10 +346,13 @@ export default function ConversationScreen() {
           />
 
           <Pressable
-            disabled={!message.trim() || sending}
+            disabled={
+              !message.trim() || sending
+            }
             style={[
               styles.sendButton,
-              (!message.trim() || sending) &&
+              (!message.trim() ||
+                sending) &&
                 styles.sendButtonDisabled,
             ]}
             onPress={sendMessage}
@@ -282,7 +426,7 @@ const styles = StyleSheet.create({
 
   status: {
     fontSize: 12,
-    color: '#667085',
+    color: '#12B76A',
     marginTop: 2,
   },
 
