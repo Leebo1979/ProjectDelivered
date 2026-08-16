@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
+  Alert,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -9,12 +10,105 @@ import {
   View,
 } from 'react-native';
 
+import { supabase } from '../lib/supabase';
+
 export default function CreateProfileScreen() {
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const cleanUsername = username
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._]/g, '');
 
   const canContinue =
-    displayName.trim().length > 0 && username.trim().length >= 3;
+    displayName.trim().length > 0 &&
+    cleanUsername.length >= 3 &&
+    !saving;
+
+  const saveProfile = async () => {
+    const cleanDisplayName = displayName.trim();
+
+    if (!cleanDisplayName) {
+      Alert.alert(
+        'Display name required',
+        'Please enter your display name.'
+      );
+      return;
+    }
+
+    if (cleanUsername.length < 3) {
+      Alert.alert(
+        'Username too short',
+        'Please choose a username with at least 3 characters.'
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        Alert.alert(
+          'Unable to load account',
+          userError.message
+        );
+        return;
+      }
+
+      if (!user) {
+        Alert.alert(
+          'Not signed in',
+          'Please create or sign in to your account again.'
+        );
+        return;
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .insert({
+          id: user.id,
+          display_name: cleanDisplayName,
+          username: cleanUsername,
+        });
+
+      if (error) {
+        if (
+          error.code === '23505' ||
+          error.message.toLowerCase().includes('duplicate')
+        ) {
+          Alert.alert(
+            'Username unavailable',
+            'That username is already taken. Please choose another one.'
+          );
+          return;
+        }
+
+        Alert.alert(
+          'Unable to save profile',
+          error.message
+        );
+        return;
+      }
+
+      router.push('/create-pin');
+    } catch (error) {
+      console.error('Profile save error:', error);
+
+      Alert.alert(
+        'Something went wrong',
+        'Project Delivered could not save your profile. Please try again.'
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -35,7 +129,9 @@ export default function CreateProfileScreen() {
           </View>
 
           <Pressable>
-            <Text style={styles.photoAction}>Add profile photo</Text>
+            <Text style={styles.photoAction}>
+              Add profile photo
+            </Text>
           </Pressable>
         </View>
 
@@ -62,7 +158,9 @@ export default function CreateProfileScreen() {
               value={username}
               onChangeText={(text) =>
                 setUsername(
-                  text.toLowerCase().replace(/[^a-z0-9._]/g, '')
+                  text
+                    .toLowerCase()
+                    .replace(/[^a-z0-9._]/g, '')
                 )
               }
               placeholder="lee"
@@ -74,7 +172,7 @@ export default function CreateProfileScreen() {
           </View>
 
           <Text style={styles.helper}>
-            This is how other people will find and invite you.
+            Other people will use this username to find and invite you.
           </Text>
         </View>
 
@@ -84,9 +182,11 @@ export default function CreateProfileScreen() {
             styles.button,
             !canContinue && styles.buttonDisabled,
           ]}
-          onPress={() => router.push('/create-pin')}
+          onPress={saveProfile}
         >
-          <Text style={styles.buttonText}>Continue</Text>
+          <Text style={styles.buttonText}>
+            {saving ? 'Saving...' : 'Continue'}
+          </Text>
         </Pressable>
       </View>
     </SafeAreaView>
@@ -98,11 +198,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F7F8FA',
   },
+
   container: {
     flex: 1,
     paddingHorizontal: 28,
     paddingTop: 36,
   },
+
   eyebrow: {
     fontSize: 13,
     fontWeight: '700',
@@ -110,6 +212,7 @@ const styles = StyleSheet.create({
     color: '#4169E1',
     marginBottom: 12,
   },
+
   title: {
     fontSize: 36,
     lineHeight: 42,
@@ -117,16 +220,19 @@ const styles = StyleSheet.create({
     color: '#101828',
     marginBottom: 12,
   },
+
   subtitle: {
     fontSize: 17,
     lineHeight: 25,
     color: '#475467',
     marginBottom: 30,
   },
+
   avatarSection: {
     alignItems: 'center',
     marginBottom: 32,
   },
+
   avatar: {
     width: 88,
     height: 88,
@@ -136,25 +242,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 12,
   },
+
   avatarText: {
     fontSize: 32,
     fontWeight: '700',
     color: '#667085',
   },
+
   photoAction: {
     fontSize: 15,
     fontWeight: '600',
     color: '#4169E1',
   },
+
   field: {
     marginBottom: 22,
   },
+
   label: {
     fontSize: 15,
     fontWeight: '600',
     color: '#344054',
     marginBottom: 8,
   },
+
   input: {
     height: 52,
     borderWidth: 1,
@@ -165,6 +276,7 @@ const styles = StyleSheet.create({
     color: '#101828',
     backgroundColor: '#FFFFFF',
   },
+
   usernameRow: {
     height: 52,
     borderWidth: 1,
@@ -175,22 +287,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+
   atSymbol: {
     fontSize: 17,
     color: '#667085',
     marginRight: 3,
   },
+
   usernameInput: {
     flex: 1,
     fontSize: 17,
     color: '#101828',
   },
+
   helper: {
     fontSize: 13,
     lineHeight: 19,
     color: '#667085',
     marginTop: 7,
   },
+
   button: {
     marginTop: 'auto',
     marginBottom: 28,
@@ -200,9 +316,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#4169E1',
   },
+
   buttonDisabled: {
     opacity: 0.4,
   },
+
   buttonText: {
     fontSize: 17,
     fontWeight: '700',
