@@ -452,6 +452,10 @@ export default function RootLayout() {
         />
 
         <Stack.Screen
+          name="media-files"
+        />
+
+        <Stack.Screen
           name="modal"
         />
       </Stack>

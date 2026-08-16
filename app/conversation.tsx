@@ -2266,6 +2266,23 @@ export default function ConversationScreen() {
       );
     };
 
+  const openMediaAndFiles =
+    () => {
+      if (!conversationId) {
+        return;
+      }
+
+      router.push({
+        pathname:
+          '/media-files',
+        params: {
+          conversationId,
+          title:
+            conversationTitle,
+        },
+      });
+    };
+
   const openConversationDetails =
     () => {
       if (
@@ -2729,6 +2746,23 @@ export default function ConversationScreen() {
                       : 'Live'}
               </Text>
             </View>
+          </Pressable>
+
+          <Pressable
+            style={
+              styles.mediaButton
+            }
+            onPress={
+              openMediaAndFiles
+            }
+          >
+            <Text
+              style={
+                styles.mediaButtonText
+              }
+            >
+              MEDIA
+            </Text>
           </Pressable>
         </View>
 
@@ -3545,6 +3579,29 @@ const styles =
 
     headerProfilePressable: {
       paddingVertical: 5,
+    },
+
+    mediaButton: {
+      height: 36,
+      paddingHorizontal: 12,
+      borderRadius: 18,
+      backgroundColor:
+        '#F2F4F7',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginLeft: 8,
+    },
+
+    mediaButtonText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.7,
+      color:
+        '#4169E1',
     },
 
     avatar: {
