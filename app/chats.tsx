@@ -39,6 +39,7 @@ type ChatListItem = {
   isGroup: boolean;
   unreadCount: number;
   isMuted: boolean;
+  isPinned: boolean;
 };
 
 export default function ChatsScreen() {
@@ -62,6 +63,10 @@ export default function ChatsScreen() {
       null;
 
     let muteChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let pinChannel:
       ReturnType<typeof supabase.channel> | null =
       null;
 
@@ -161,6 +166,29 @@ export default function ChatsScreen() {
               }
             )
             .subscribe();
+
+        pinChannel =
+          supabase
+            .channel(
+              `chat-list-pins:${user.id}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'pinned_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
       };
 
     subscribeToRealtime();
@@ -189,6 +217,14 @@ export default function ChatsScreen() {
       ) {
         supabase.removeChannel(
           muteChannel
+        );
+      }
+
+      if (
+        pinChannel
+      ) {
+        supabase.removeChannel(
+          pinChannel
         );
       }
     };
@@ -303,6 +339,43 @@ export default function ChatsScreen() {
         new Set(
           (
             mutedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
+
+      const {
+        data: pinnedRows,
+        error: pinnedError,
+      } = await supabase
+        .from(
+          'pinned_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (pinnedError) {
+        console.error(
+          'Pinned conversations load error:',
+          pinnedError
+        );
+      }
+
+      const pinnedIds =
+        new Set(
+          (
+            pinnedRows ??
             []
           ).map(
             (item) =>
@@ -528,6 +601,11 @@ export default function ChatsScreen() {
                   mutedIds.has(
                     conversation.id
                   ),
+
+                isPinned:
+                  pinnedIds.has(
+                    conversation.id
+                  ),
               };
             }
           )
@@ -535,6 +613,15 @@ export default function ChatsScreen() {
 
       chatItems.sort(
         (a, b) => {
+          if (
+            a.isPinned !==
+            b.isPinned
+          ) {
+            return a.isPinned
+              ? -1
+              : 1;
+          }
+
           const aTime =
             a.latestMessageAt
               ? new Date(
@@ -570,6 +657,170 @@ export default function ChatsScreen() {
       }
     }
   };
+
+  const togglePin =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      if (chat.isPinned) {
+        const {
+          error,
+        } = await supabase
+          .from(
+            'pinned_conversations'
+          )
+          .delete()
+          .eq(
+            'user_id',
+            user.id
+          )
+          .eq(
+            'conversation_id',
+            chat.id
+          );
+
+        if (error) {
+          Alert.alert(
+            'Unable to unpin',
+            error.message
+          );
+          return;
+        }
+
+        setChats(
+          (current) =>
+            current
+              .map(
+                (item) =>
+                  item.id ===
+                  chat.id
+                    ? {
+                        ...item,
+                        isPinned:
+                          false,
+                      }
+                    : item
+              )
+              .sort(
+                (a, b) => {
+                  if (
+                    a.isPinned !==
+                    b.isPinned
+                  ) {
+                    return a.isPinned
+                      ? -1
+                      : 1;
+                  }
+
+                  const aTime =
+                    a.latestMessageAt
+                      ? new Date(
+                          a.latestMessageAt
+                        ).getTime()
+                      : 0;
+
+                  const bTime =
+                    b.latestMessageAt
+                      ? new Date(
+                          b.latestMessageAt
+                        ).getTime()
+                      : 0;
+
+                  return (
+                    bTime -
+                    aTime
+                  );
+                }
+              )
+        );
+
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from(
+          'pinned_conversations'
+        )
+        .insert({
+          user_id:
+            user.id,
+          conversation_id:
+            chat.id,
+        });
+
+      if (error) {
+        Alert.alert(
+          'Unable to pin',
+          error.message
+        );
+        return;
+      }
+
+      setChats(
+        (current) =>
+          current
+            .map(
+              (item) =>
+                item.id ===
+                chat.id
+                  ? {
+                      ...item,
+                      isPinned:
+                        true,
+                    }
+                  : item
+            )
+            .sort(
+              (a, b) => {
+                if (
+                  a.isPinned !==
+                  b.isPinned
+                ) {
+                  return a.isPinned
+                    ? -1
+                    : 1;
+                }
+
+                const aTime =
+                  a.latestMessageAt
+                    ? new Date(
+                        a.latestMessageAt
+                      ).getTime()
+                    : 0;
+
+                const bTime =
+                  b.latestMessageAt
+                    ? new Date(
+                        b.latestMessageAt
+                      ).getTime()
+                    : 0;
+
+                return (
+                  bTime -
+                  aTime
+                );
+              }
+            )
+      );
+    };
 
   const toggleMute =
     async (
@@ -679,6 +930,16 @@ export default function ChatsScreen() {
           ? 'Notifications are muted for this conversation.'
           : 'Choose an action.',
         [
+          {
+            text:
+              chat.isPinned
+                ? 'Unpin Conversation'
+                : 'Pin Conversation',
+            onPress: () =>
+              togglePin(
+                chat
+              ),
+          },
           {
             text:
               chat.isMuted
@@ -1059,6 +1320,16 @@ export default function ChatsScreen() {
                         </Text>
                       )}
 
+                      {chat.isPinned && (
+                        <Text
+                          style={
+                            styles.pinnedLabel
+                          }
+                        >
+                          PINNED
+                        </Text>
+                      )}
+
                       {chat.isMuted && (
                         <Text
                           style={
@@ -1422,6 +1693,20 @@ const styles =
         '#027A48',
       backgroundColor:
         '#ECFDF3',
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
+
+    pinnedLabel: {
+      marginLeft: 8,
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      color:
+        '#6941C6',
+      backgroundColor:
+        '#F4F3FF',
       paddingHorizontal: 6,
       paddingVertical: 3,
       borderRadius: 5,
