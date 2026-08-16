@@ -92,14 +92,18 @@ export default function ConversationScreen() {
   const [currentUserId, setCurrentUserId] =
     useState<string | null>(null);
 
-  const [currentDisplayName, setCurrentDisplayName] =
-    useState('Someone');
+  const [
+    currentDisplayName,
+    setCurrentDisplayName,
+  ] = useState('Someone');
 
   const [otherUser, setOtherUser] =
     useState<OtherUser | null>(null);
 
-  const [conversationTitle, setConversationTitle] =
-    useState('Conversation');
+  const [
+    conversationTitle,
+    setConversationTitle,
+  ] = useState('Conversation');
 
   const [isGroup, setIsGroup] =
     useState(false);
@@ -107,39 +111,53 @@ export default function ConversationScreen() {
   const [readMap, setReadMap] =
     useState<ReadMap>({});
 
-  const [favouriteMap, setFavouriteMap] =
-    useState<FavouriteMap>({});
+  const [
+    favouriteMap,
+    setFavouriteMap,
+  ] = useState<FavouriteMap>({});
 
-  const [reactionMap, setReactionMap] =
-    useState<ReactionMap>({});
+  const [
+    reactionMap,
+    setReactionMap,
+  ] = useState<ReactionMap>({});
 
-  const [senderNameMap, setSenderNameMap] =
-    useState<SenderNameMap>({});
+  const [
+    senderNameMap,
+    setSenderNameMap,
+  ] = useState<SenderNameMap>({});
 
-  const [typingUsers, setTypingUsers] =
-    useState<TypingUserMap>({});
+  const [
+    typingUsers,
+    setTypingUsers,
+  ] = useState<TypingUserMap>({});
 
-  const [attachmentUrlMap, setAttachmentUrlMap] =
-    useState<AttachmentUrlMap>({});
+  const [
+    attachmentUrlMap,
+    setAttachmentUrlMap,
+  ] = useState<AttachmentUrlMap>({});
 
   const [replyingTo, setReplyingTo] =
     useState<Message | null>(null);
 
-  const [pendingAttachment, setPendingAttachment] =
-    useState<PendingAttachment | null>(null);
+  const [
+    pendingAttachment,
+    setPendingAttachment,
+  ] = useState<PendingAttachment | null>(
+    null
+  );
 
   const listRef =
     useRef<FlatList<Message>>(null);
 
   const typingChannelRef =
-    useRef<ReturnType<typeof supabase.channel> | null>(
-      null
-    );
+    useRef<
+      ReturnType<typeof supabase.channel> | null
+    >(null);
 
   const typingTimeoutRef =
-    useRef<ReturnType<typeof setTimeout> | null>(
-      null
-    );
+    useRef<
+      ReturnType<typeof setTimeout> | null
+    >(null);
 
   const typingText =
     useMemo(() => {
@@ -148,21 +166,15 @@ export default function ConversationScreen() {
           typingUsers
         );
 
-      if (
-        names.length === 0
-      ) {
+      if (names.length === 0) {
         return '';
       }
 
-      if (
-        names.length === 1
-      ) {
+      if (names.length === 1) {
         return `${names[0]} is typing…`;
       }
 
-      if (
-        names.length === 2
-      ) {
+      if (names.length === 2) {
         return `${names[0]} and ${names[1]} are typing…`;
       }
 
@@ -305,16 +317,13 @@ export default function ConversationScreen() {
           {
             event: 'INSERT',
             schema: 'public',
-            table:
-              'message_reads',
+            table: 'message_reads',
           },
           (payload) => {
             const read =
               payload.new as {
-                message_id:
-                  string;
-                user_id:
-                  string;
+                message_id: string;
+                user_id: string;
               };
 
             if (
@@ -346,12 +355,9 @@ export default function ConversationScreen() {
           ({ payload }) => {
             const typingPayload =
               payload as {
-                userId:
-                  string;
-                displayName:
-                  string;
-                isTyping:
-                  boolean;
+                userId: string;
+                displayName: string;
+                isTyping: boolean;
               };
 
             if (
@@ -534,8 +540,7 @@ export default function ConversationScreen() {
 
   const loadSenderNames =
     async (
-      loadedMessages:
-        Message[]
+      loadedMessages: Message[]
     ) => {
       const uniqueSenderIds =
         [
@@ -638,8 +643,7 @@ export default function ConversationScreen() {
 
   const loadAttachmentUrls =
     async (
-      loadedMessages:
-        Message[]
+      loadedMessages: Message[]
     ) => {
       const attachmentMessages =
         loadedMessages.filter(
@@ -2572,7 +2576,7 @@ export default function ConversationScreen() {
                 styles.attachmentButtonText
               }
             >
-              ATT
+              +
             </Text>
           </Pressable>
 
@@ -3017,9 +3021,9 @@ const styles =
     },
 
     attachmentButton: {
-      width: 58,
+      width: 44,
       height: 44,
-      borderRadius: 12,
+      borderRadius: 22,
       marginRight: 8,
       backgroundColor:
         '#EEF2FF',
@@ -3028,13 +3032,14 @@ const styles =
         'center',
       borderWidth: 1,
       borderColor:
-        '#4169E1',
+        '#D9E0FF',
     },
 
     attachmentButtonText: {
       color: '#4169E1',
-      fontSize: 12,
-      fontWeight: '800',
+      fontSize: 28,
+      lineHeight: 30,
+      fontWeight: '500',
     },
 
     input: {
