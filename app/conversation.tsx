@@ -35,6 +35,7 @@ import {
   Platform,
   Pressable,
   SafeAreaView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -2375,6 +2376,195 @@ export default function ConversationScreen() {
       }
     };
 
+  const getFileTypeLabel =
+    (
+      mimeType:
+        string | null,
+      fileName:
+        string | null
+    ) => {
+      if (
+        mimeType ===
+          'application/pdf' ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.pdf')
+      ) {
+        return 'PDF';
+      }
+
+      if (
+        mimeType?.includes(
+          'word'
+        ) ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.doc') ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.docx')
+      ) {
+        return 'WORD';
+      }
+
+      if (
+        mimeType?.includes(
+          'spreadsheet'
+        ) ||
+        mimeType?.includes(
+          'excel'
+        ) ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.xls') ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.xlsx')
+      ) {
+        return 'SHEET';
+      }
+
+      if (
+        mimeType?.includes(
+          'presentation'
+        ) ||
+        mimeType?.includes(
+          'powerpoint'
+        ) ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.ppt') ||
+        fileName
+          ?.toLowerCase()
+          .endsWith('.pptx')
+      ) {
+        return 'SLIDES';
+      }
+
+      if (
+        mimeType?.startsWith(
+          'text/'
+        )
+      ) {
+        return 'TEXT';
+      }
+
+      return 'FILE';
+    };
+
+  const shareAttachment =
+    async (
+      item: Message
+    ) => {
+      if (
+        !item.attachment_path
+      ) {
+        return;
+      }
+
+      let url =
+        attachmentUrlMap[
+          item.id
+        ];
+
+      if (!url) {
+        const {
+          data,
+          error,
+        } = await supabase
+          .storage
+          .from(
+            'message-attachments'
+          )
+          .createSignedUrl(
+            item.attachment_path,
+            60 * 60
+          );
+
+        if (
+          error ||
+          !data
+        ) {
+          Alert.alert(
+            'Unable to share attachment',
+            error?.message ??
+              'Please try again.'
+          );
+          return;
+        }
+
+        url =
+          data.signedUrl;
+
+        setAttachmentUrlMap(
+          (current) => ({
+            ...current,
+            [item.id]:
+              url,
+          })
+        );
+      }
+
+      try {
+        await Share.share({
+          title:
+            item.attachment_name ??
+            'Attachment',
+          message:
+            url,
+          url,
+        });
+      } catch (error) {
+        console.error(
+          'Share attachment error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to share attachment',
+          'Please try again.'
+        );
+      }
+    };
+
+  const showAttachmentActions =
+    (
+      item: Message
+    ) => {
+      Alert.alert(
+        item.attachment_name ??
+          'Attachment',
+        getFileTypeLabel(
+          item.attachment_type,
+          item.attachment_name
+        ),
+        [
+          {
+            text:
+              'Open',
+            onPress: () =>
+              openAttachment(
+                item
+              ),
+          },
+          {
+            text:
+              'Share',
+            onPress: () =>
+              shareAttachment(
+                item
+              ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
+
   const formatFileSize =
     (
       bytes:
@@ -2743,14 +2933,35 @@ export default function ConversationScreen() {
                               item
                             )
                           }
+                          onLongPress={() =>
+                            showAttachmentActions(
+                              item
+                            )
+                          }
+                          delayLongPress={
+                            350
+                          }
                         >
-                          <Text
+                          <View
                             style={
-                              styles.fileIcon
+                              sentByMe
+                                ? styles.sentFileBadge
+                                : styles.receivedFileBadge
                             }
                           >
-                            📎
-                          </Text>
+                            <Text
+                              style={
+                                sentByMe
+                                  ? styles.sentFileBadgeText
+                                  : styles.receivedFileBadgeText
+                              }
+                            >
+                              {getFileTypeLabel(
+                                item.attachment_type,
+                                item.attachment_name
+                              )}
+                            </Text>
+                          </View>
 
                           <View
                             style={
@@ -2764,26 +2975,46 @@ export default function ConversationScreen() {
                                   : styles.receivedFileName
                               }
                               numberOfLines={
-                                1
+                                2
                               }
                             >
                               {item.attachment_name ??
                                 'Attachment'}
                             </Text>
 
-                            {item.attachment_size ? (
-                              <Text
-                                style={
-                                  sentByMe
-                                    ? styles.sentFileSize
-                                    : styles.receivedFileSize
-                                }
-                              >
-                                {formatFileSize(
-                                  item.attachment_size
-                                )}
-                              </Text>
-                            ) : null}
+                            <Text
+                              style={
+                                sentByMe
+                                  ? styles.sentFileMeta
+                                  : styles.receivedFileMeta
+                              }
+                            >
+                              {[
+                                getFileTypeLabel(
+                                  item.attachment_type,
+                                  item.attachment_name
+                                ),
+                                item.attachment_size
+                                  ? formatFileSize(
+                                      item.attachment_size
+                                    )
+                                  : null,
+                              ]
+                                .filter(
+                                  Boolean
+                                )
+                                .join(' · ')}
+                            </Text>
+
+                            <Text
+                              style={
+                                sentByMe
+                                  ? styles.sentFileHint
+                                  : styles.receivedFileHint
+                              }
+                            >
+                              Tap to open · Hold for options
+                            </Text>
                           </View>
                         </Pressable>
                       )}
@@ -3438,7 +3669,8 @@ const styles =
     },
 
     receivedFileCard: {
-      minWidth: 220,
+      minWidth: 250,
+      maxWidth: 300,
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor:
@@ -3449,7 +3681,8 @@ const styles =
     },
 
     sentFileCard: {
-      minWidth: 220,
+      minWidth: 250,
+      maxWidth: 300,
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor:
@@ -3459,9 +3692,50 @@ const styles =
       marginBottom: 5,
     },
 
-    fileIcon: {
-      fontSize: 25,
-      marginRight: 10,
+    receivedFileBadge: {
+      width: 52,
+      height: 52,
+      borderRadius: 12,
+      backgroundColor:
+        '#FFFFFF',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginRight: 11,
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+    },
+
+    sentFileBadge: {
+      width: 52,
+      height: 52,
+      borderRadius: 12,
+      backgroundColor:
+        'rgba(255,255,255,0.16)',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginRight: 11,
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.24)',
+    },
+
+    receivedFileBadgeText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+      color:
+        '#344054',
+    },
+
+    sentFileBadgeText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+      color:
+        '#FFFFFF',
     },
 
     fileInfo: {
@@ -3480,15 +3754,27 @@ const styles =
       color: '#FFFFFF',
     },
 
-    receivedFileSize: {
-      marginTop: 3,
+    receivedFileMeta: {
+      marginTop: 4,
       fontSize: 11,
       color: '#667085',
     },
 
-    sentFileSize: {
-      marginTop: 3,
+    sentFileMeta: {
+      marginTop: 4,
       fontSize: 11,
+      color: '#DDE4FF',
+    },
+
+    receivedFileHint: {
+      marginTop: 4,
+      fontSize: 10,
+      color: '#98A2B3',
+    },
+
+    sentFileHint: {
+      marginTop: 4,
+      fontSize: 10,
       color: '#DDE4FF',
     },
 
