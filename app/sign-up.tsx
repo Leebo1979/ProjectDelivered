@@ -1,7 +1,6 @@
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   SafeAreaView,
@@ -14,40 +13,16 @@ import {
 import { supabase } from '../lib/supabase';
 
 export default function SignUpScreen() {
-  const [checkingSession, setCheckingSession] = useState(true);
+  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [working, setWorking] = useState(false);
 
-  useEffect(() => {
-    checkExistingSession();
-  }, []);
-
-  const checkExistingSession = async () => {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (session?.user) {
-        router.replace('/create-profile');
-        return;
-      }
-    } catch (error) {
-      console.error('Session check error:', error);
-    } finally {
-      setCheckingSession(false);
-    }
-  };
-
-  const createAccount = async () => {
+  const submit = async () => {
     const cleanEmail = email.trim().toLowerCase();
 
     if (!cleanEmail) {
-      Alert.alert(
-        'Email required',
-        'Please enter your email address.'
-      );
+      Alert.alert('Email required', 'Please enter your email address.');
       return;
     }
 
@@ -60,25 +35,47 @@ export default function SignUpScreen() {
     }
 
     try {
-      setCreating(true);
+      setWorking(true);
 
-      const { data, error } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password,
-      });
+      if (mode === 'sign-in') {
+        const { data, error } =
+          await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
 
-      if (error) {
-        Alert.alert(
-          'Unable to create account',
-          error.message
-        );
+        if (error) {
+          Alert.alert('Unable to sign in', error.message);
+          return;
+        }
+
+        if (!data.session?.user) {
+          Alert.alert(
+            'Sign in failed',
+            'No active session was returned.'
+          );
+          return;
+        }
+
+        router.replace('/create-profile');
         return;
       }
 
-      if (!data.user) {
+      const { data, error } =
+        await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+        });
+
+      if (error) {
+        Alert.alert('Unable to create account', error.message);
+        return;
+      }
+
+      if (!data.session?.user) {
         Alert.alert(
-          'Account not created',
-          'Please try again.'
+          'Account created',
+          'Your account was created, but no active session was returned.'
         );
         return;
       }
@@ -92,29 +89,23 @@ export default function SignUpScreen() {
         'Please try again.'
       );
     } finally {
-      setCreating(false);
+      setWorking(false);
     }
   };
-
-  if (checkingSession) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4169E1" />
-      </View>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.eyebrow}>CREATE ACCOUNT</Text>
+        <Text style={styles.eyebrow}>PROJECT DELIVERED</Text>
 
         <Text style={styles.title}>
-          Join Project Delivered
+          {mode === 'sign-in' ? 'Sign In' : 'Create Account'}
         </Text>
 
         <Text style={styles.subtitle}>
-          Create an account so your profile and conversations can sync securely between devices.
+          {mode === 'sign-in'
+            ? 'Sign in to continue to your profile and conversations.'
+            : 'Create an account so your profile and conversations can sync securely.'}
         </Text>
 
         <View style={styles.field}>
@@ -147,15 +138,31 @@ export default function SignUpScreen() {
         </View>
 
         <Pressable
-          disabled={creating}
+          disabled={working}
           style={[
             styles.button,
-            creating && styles.buttonDisabled,
+            working && styles.buttonDisabled,
           ]}
-          onPress={createAccount}
+          onPress={submit}
         >
           <Text style={styles.buttonText}>
-            {creating ? 'Creating...' : 'Create Account'}
+            {working
+              ? 'Please wait...'
+              : mode === 'sign-in'
+                ? 'Sign In'
+                : 'Create Account'}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() =>
+            setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')
+          }
+        >
+          <Text style={styles.switchText}>
+            {mode === 'sign-in'
+              ? 'Need an account? Create one'
+              : 'Already have an account? Sign in'}
           </Text>
         </Pressable>
       </View>
@@ -164,24 +171,15 @@ export default function SignUpScreen() {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F7F8FA',
-  },
-
   safeArea: {
     flex: 1,
     backgroundColor: '#F7F8FA',
   },
-
   container: {
     flex: 1,
     paddingHorizontal: 28,
     paddingTop: 60,
   },
-
   eyebrow: {
     fontSize: 13,
     fontWeight: '700',
@@ -189,7 +187,6 @@ const styles = StyleSheet.create({
     color: '#4169E1',
     marginBottom: 14,
   },
-
   title: {
     fontSize: 36,
     lineHeight: 42,
@@ -197,25 +194,21 @@ const styles = StyleSheet.create({
     color: '#101828',
     marginBottom: 14,
   },
-
   subtitle: {
     fontSize: 17,
     lineHeight: 25,
     color: '#475467',
     marginBottom: 36,
   },
-
   field: {
     marginBottom: 22,
   },
-
   label: {
     fontSize: 15,
     fontWeight: '600',
     color: '#344054',
     marginBottom: 8,
   },
-
   input: {
     height: 52,
     borderWidth: 1,
@@ -226,7 +219,6 @@ const styles = StyleSheet.create({
     color: '#101828',
     backgroundColor: '#FFFFFF',
   },
-
   button: {
     height: 54,
     marginTop: 10,
@@ -235,14 +227,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#4169E1',
   },
-
   buttonDisabled: {
     opacity: 0.5,
   },
-
   buttonText: {
     fontSize: 17,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  switchText: {
+    marginTop: 22,
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#4169E1',
   },
 });

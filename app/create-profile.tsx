@@ -72,23 +72,37 @@ export default function CreateProfileScreen() {
 
       const { error } = await supabase
         .from('profiles')
-        .insert({
-          id: user.id,
-          display_name: cleanDisplayName,
-          username: cleanUsername,
-        });
+        .upsert(
+          {
+            id: user.id,
+            display_name: cleanDisplayName,
+            username: cleanUsername,
+            updated_at: new Date().toISOString(),
+          },
+          {
+            onConflict: 'id',
+          }
+        );
 
       if (error) {
-        if (
-          error.code === '23505' ||
-          error.message.toLowerCase().includes('duplicate')
-        ) {
+        const errorMessage = error.message.toLowerCase();
+
+        const usernameConflict =
+          error.code === '23505' &&
+          (
+            errorMessage.includes('profiles_username_unique') ||
+            errorMessage.includes('username')
+          );
+
+        if (usernameConflict) {
           Alert.alert(
             'Username unavailable',
-            'That username is already taken. Please choose another one.'
+            'That username is already being used by another account. Please choose another one.'
           );
           return;
         }
+
+        console.error('Profile save error:', error);
 
         Alert.alert(
           'Unable to save profile',
@@ -113,9 +127,13 @@ export default function CreateProfileScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.eyebrow}>YOUR PROFILE</Text>
+        <Text style={styles.eyebrow}>
+          YOUR PROFILE
+        </Text>
 
-        <Text style={styles.title}>Create Your Profile</Text>
+        <Text style={styles.title}>
+          Create Your Profile
+        </Text>
 
         <Text style={styles.subtitle}>
           Choose how you'll appear to other people in Project Delivered.
@@ -136,7 +154,9 @@ export default function CreateProfileScreen() {
         </View>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Display Name</Text>
+          <Text style={styles.label}>
+            Display Name
+          </Text>
 
           <TextInput
             value={displayName}
@@ -149,10 +169,14 @@ export default function CreateProfileScreen() {
         </View>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Username</Text>
+          <Text style={styles.label}>
+            Username
+          </Text>
 
           <View style={styles.usernameRow}>
-            <Text style={styles.atSymbol}>@</Text>
+            <Text style={styles.atSymbol}>
+              @
+            </Text>
 
             <TextInput
               value={username}
