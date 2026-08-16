@@ -1,6 +1,3 @@
-import * as Clipboard from 'expo-clipboard';
-import * as DocumentPicker from 'expo-document-picker';
-import * as ImagePicker from 'expo-image-picker';
 import {
   AudioModule,
   RecordingPresets,
@@ -10,6 +7,9 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
+import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import {
   router,
   useLocalSearchParams,
@@ -27,6 +27,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Linking,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -295,6 +296,13 @@ export default function ConversationScreen() {
     pendingVoiceDurationMillis,
     setPendingVoiceDurationMillis,
   ] = useState<number | null>(
+    null
+  );
+
+  const [
+    fullScreenImageUrl,
+    setFullScreenImageUrl,
+  ] = useState<string | null>(
     null
   );
 
@@ -2237,6 +2245,28 @@ export default function ConversationScreen() {
       });
     };
 
+  const openImageFullScreen =
+    (
+      item: Message
+    ) => {
+      const url =
+        attachmentUrlMap[
+          item.id
+        ];
+
+      if (!url) {
+        Alert.alert(
+          'Image unavailable',
+          'Please wait for the image to finish loading and try again.'
+        );
+        return;
+      }
+
+      setFullScreenImageUrl(
+        url
+      );
+    };
+
   const openAttachment =
     async (
       item: Message
@@ -2614,7 +2644,7 @@ export default function ConversationScreen() {
                       attachmentUrl && (
                         <Pressable
                           onPress={() =>
-                            openAttachment(
+                            openImageFullScreen(
                               item
                             )
                           }
@@ -3123,6 +3153,65 @@ export default function ConversationScreen() {
             )}
           </Pressable>
         </View>
+
+        <Modal
+          visible={
+            !!fullScreenImageUrl
+          }
+          transparent={false}
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={() =>
+            setFullScreenImageUrl(
+              null
+            )
+          }
+        >
+          <SafeAreaView
+            style={
+              styles.imageViewerSafeArea
+            }
+          >
+            <View
+              style={
+                styles.imageViewer
+              }
+            >
+              <Pressable
+                style={
+                  styles.imageViewerClose
+                }
+                onPress={() =>
+                  setFullScreenImageUrl(
+                    null
+                  )
+                }
+                hitSlop={12}
+              >
+                <Text
+                  style={
+                    styles.imageViewerCloseText
+                  }
+                >
+                  ×
+                </Text>
+              </Pressable>
+
+              {fullScreenImageUrl ? (
+                <Image
+                  source={{
+                    uri:
+                      fullScreenImageUrl,
+                  }}
+                  style={
+                    styles.fullScreenImage
+                  }
+                  resizeMode="contain"
+                />
+              ) : null}
+            </View>
+          </SafeAreaView>
+        </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -3726,6 +3815,48 @@ const styles =
       marginTop: 5,
       fontSize: 11,
       color: '#E0E7FF',
+    },
+
+    imageViewerSafeArea: {
+      flex: 1,
+      backgroundColor:
+        '#000000',
+    },
+
+    imageViewer: {
+      flex: 1,
+      backgroundColor:
+        '#000000',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+    },
+
+    imageViewerClose: {
+      position: 'absolute',
+      top: 12,
+      right: 18,
+      zIndex: 10,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        'rgba(255,255,255,0.16)',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+    },
+
+    imageViewerCloseText: {
+      color: '#FFFFFF',
+      fontSize: 32,
+      lineHeight: 34,
+      fontWeight: '400',
+    },
+
+    fullScreenImage: {
+      width: '100%',
+      height: '100%',
     },
 
     input: {
