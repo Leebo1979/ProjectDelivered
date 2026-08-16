@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { registerForPushNotifications } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 
 const ONBOARDING_KEY =
@@ -45,6 +46,10 @@ export default function ChatsScreen() {
 
   const [loading, setLoading] =
     useState(true);
+
+  useEffect(() => {
+    registerForPushNotifications();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {

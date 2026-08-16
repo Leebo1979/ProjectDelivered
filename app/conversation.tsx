@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -41,6 +41,7 @@ type ReadMap = Record<string, boolean>;
 type FavouriteMap = Record<string, boolean>;
 type ReactionMap = Record<string, string[]>;
 type SenderNameMap = Record<string, string>;
+type TypingUserMap = Record<string, string>;
 
 export default function ConversationScreen() {
   const { conversationId } = useLocalSearchParams<{
@@ -54,6 +55,9 @@ export default function ConversationScreen() {
 
   const [currentUserId, setCurrentUserId] =
     useState<string | null>(null);
+
+  const [currentDisplayName, setCurrentDisplayName] =
+    useState('Someone');
 
   const [otherUser, setOtherUser] =
     useState<OtherUser | null>(null);
@@ -76,11 +80,38 @@ export default function ConversationScreen() {
   const [senderNameMap, setSenderNameMap] =
     useState<SenderNameMap>({});
 
+  const [typingUsers, setTypingUsers] =
+    useState<TypingUserMap>({});
+
   const [replyingTo, setReplyingTo] =
     useState<Message | null>(null);
 
   const listRef =
     useRef<FlatList<Message>>(null);
+
+  const typingChannelRef =
+    useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  const typingTimeoutRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const typingText = useMemo(() => {
+    const names = Object.values(typingUsers);
+
+    if (names.length === 0) {
+      return '';
+    }
+
+    if (names.length === 1) {
+      return `${names[0]} is typing…`;
+    }
+
+    if (names.length === 2) {
+      return `${names[0]} and ${names[1]} are typing…`;
+    }
+
+    return `${names.length} people are typing…`;
+  }, [typingUsers]);
 
   useEffect(() => {
     if (!conversationId) {
@@ -88,9 +119,18 @@ export default function ConversationScreen() {
     }
 
     loadConversation();
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (
+      !conversationId ||
+      !currentUserId
+    ) {
+      return;
+    }
 
     const messageChannel = supabase
-      .channel(`conversation:${conversationId}`)
+      .channel(`messages:${conversationId}`)
       .on(
         'postgres_changes',
         {
@@ -107,8 +147,7 @@ export default function ConversationScreen() {
             const exists =
               current.some(
                 (item) =>
-                  item.id ===
-                  newMessage.id
+                  item.id === newMessage.id
               );
 
             if (exists) {
@@ -128,12 +167,12 @@ export default function ConversationScreen() {
           }
 
           if (
-            currentUserId &&
             newMessage.sender_id !==
-              currentUserId
+            currentUserId
           ) {
             await markMessageRead(
-              newMessage.id
+              newMessage.id,
+              currentUserId
             );
           }
         }
@@ -156,8 +195,7 @@ export default function ConversationScreen() {
             setMessages((current) =>
               current.filter(
                 (item) =>
-                  item.id !==
-                  updated.id
+                  item.id !== updated.id
               )
             );
 
@@ -169,10 +207,8 @@ export default function ConversationScreen() {
               item.id === updated.id
                 ? {
                     ...item,
-                    body:
-                      updated.body,
-                    edited_at:
-                      updated.edited_at,
+                    body: updated.body,
+                    edited_at: updated.edited_at,
                   }
                 : item
             )
@@ -198,22 +234,91 @@ export default function ConversationScreen() {
             };
 
           if (
-            read.user_id !==
-            currentUserId
+            read.user_id !== currentUserId
           ) {
-            setReadMap(
-              (current) => ({
-                ...current,
-                [read.message_id]:
-                  true,
-              })
-            );
+            setReadMap((current) => ({
+              ...current,
+              [read.message_id]: true,
+            }));
           }
         }
       )
       .subscribe();
 
+    const typingChannel = supabase
+      .channel(`typing:${conversationId}`)
+      .on(
+        'broadcast',
+        {
+          event: 'typing',
+        },
+        ({ payload }) => {
+          const typingPayload =
+            payload as {
+              userId: string;
+              displayName: string;
+              isTyping: boolean;
+            };
+
+          if (
+            typingPayload.userId ===
+            currentUserId
+          ) {
+            return;
+          }
+
+          setTypingUsers((current) => {
+            const next = {
+              ...current,
+            };
+
+            if (
+              typingPayload.isTyping
+            ) {
+              next[
+                typingPayload.userId
+              ] =
+                typingPayload.displayName;
+            } else {
+              delete next[
+                typingPayload.userId
+              ];
+            }
+
+            return next;
+          });
+        }
+      )
+      .subscribe();
+
+    typingChannelRef.current =
+      typingChannel;
+
     return () => {
+      if (
+        typingTimeoutRef.current
+      ) {
+        clearTimeout(
+          typingTimeoutRef.current
+        );
+      }
+
+      typingChannelRef.current
+        ?.send({
+          type: 'broadcast',
+          event: 'typing',
+          payload: {
+            userId: currentUserId,
+            displayName:
+              currentDisplayName,
+            isTyping: false,
+          },
+        })
+        .catch(() => {});
+
+      typingChannelRef.current =
+        null;
+
       supabase.removeChannel(
         messageChannel
       );
@@ -221,10 +326,15 @@ export default function ConversationScreen() {
       supabase.removeChannel(
         readChannel
       );
+
+      supabase.removeChannel(
+        typingChannel
+      );
     };
   }, [
     conversationId,
     currentUserId,
+    currentDisplayName,
     isGroup,
   ]);
 
@@ -245,6 +355,65 @@ export default function ConversationScreen() {
     return () =>
       clearTimeout(timer);
   }, [messages]);
+
+  const sendTypingStatus =
+    async (
+      isTypingNow: boolean
+    ) => {
+      if (
+        !currentUserId ||
+        !typingChannelRef.current
+      ) {
+        return;
+      }
+
+      try {
+        await typingChannelRef.current.send({
+          type: 'broadcast',
+          event: 'typing',
+          payload: {
+            userId:
+              currentUserId,
+            displayName:
+              currentDisplayName,
+            isTyping:
+              isTypingNow,
+          },
+        });
+      } catch (error) {
+        console.error(
+          'Typing broadcast error:',
+          error
+        );
+      }
+    };
+
+  const handleMessageChange =
+    (text: string) => {
+      setMessage(text);
+
+      if (
+        typingTimeoutRef.current
+      ) {
+        clearTimeout(
+          typingTimeoutRef.current
+        );
+      }
+
+      if (
+        text.trim().length === 0
+      ) {
+        sendTypingStatus(false);
+        return;
+      }
+
+      sendTypingStatus(true);
+
+      typingTimeoutRef.current =
+        setTimeout(() => {
+          sendTypingStatus(false);
+        }, 1200);
+    };
 
   const ensureSenderName =
     async (
@@ -365,6 +534,23 @@ export default function ConversationScreen() {
         setCurrentUserId(
           user.id
         );
+
+        const {
+          data: myProfile,
+        } = await supabase
+          .from('profiles')
+          .select('display_name')
+          .eq(
+            'id',
+            user.id
+          )
+          .maybeSingle();
+
+        if (myProfile) {
+          setCurrentDisplayName(
+            myProfile.display_name
+          );
+        }
 
         const {
           data: conversation,
@@ -616,7 +802,8 @@ export default function ConversationScreen() {
     ) => {
       const ids =
         loadedMessages.map(
-          (item) => item.id
+          (item) =>
+            item.id
         );
 
       if (
@@ -784,6 +971,18 @@ export default function ConversationScreen() {
 
       try {
         setSending(true);
+
+        if (
+          typingTimeoutRef.current
+        ) {
+          clearTimeout(
+            typingTimeoutRef.current
+          );
+        }
+
+        await sendTypingStatus(
+          false
+        );
 
         const {
           data,
@@ -1359,14 +1558,18 @@ export default function ConversationScreen() {
 
               <Text
                 style={
-                  styles.status
+                  typingText
+                    ? styles.typingStatus
+                    : styles.status
                 }
               >
-                {isGroup
-                  ? 'Tap for group details'
-                  : otherUser
-                    ? `@${otherUser.username}`
-                    : 'Live'}
+                {typingText
+                  ? typingText
+                  : isGroup
+                    ? 'Tap for group details'
+                    : otherUser
+                      ? `@${otherUser.username}`
+                      : 'Live'}
               </Text>
             </View>
           </Pressable>
@@ -1610,6 +1813,22 @@ export default function ConversationScreen() {
           </View>
         )}
 
+        {typingText ? (
+          <View
+            style={
+              styles.typingBar
+            }
+          >
+            <Text
+              style={
+                styles.typingBarText
+              }
+            >
+              {typingText}
+            </Text>
+          </View>
+        ) : null}
+
         <View
           style={
             styles.composer
@@ -1618,7 +1837,7 @@ export default function ConversationScreen() {
           <TextInput
             value={message}
             onChangeText={
-              setMessage
+              handleMessageChange
             }
             placeholder={
               replyingTo
@@ -1752,6 +1971,13 @@ const styles =
     status: {
       fontSize: 12,
       color: '#667085',
+      marginTop: 2,
+    },
+
+    typingStatus: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: '#4169E1',
       marginTop: 2,
     },
 
@@ -1905,6 +2131,21 @@ const styles =
       fontSize: 28,
       color: '#667085',
       paddingLeft: 12,
+    },
+
+    typingBar: {
+      minHeight: 24,
+      paddingHorizontal: 20,
+      justifyContent:
+        'center',
+      backgroundColor:
+        '#FFFFFF',
+    },
+
+    typingBarText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: '#4169E1',
     },
 
     composer: {
