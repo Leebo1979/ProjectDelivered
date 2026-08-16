@@ -38,6 +38,7 @@ type ChatListItem = {
   latestMessageAt: string | null;
   isGroup: boolean;
   unreadCount: number;
+  isMuted: boolean;
 };
 
 export default function ChatsScreen() {
@@ -51,15 +52,161 @@ export default function ChatsScreen() {
     registerForPushNotifications();
   }, []);
 
+  useEffect(() => {
+    let messageChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let readChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let muteChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let cancelled = false;
+
+    const subscribeToRealtime =
+      async () => {
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (
+          cancelled ||
+          error ||
+          !user
+        ) {
+          return;
+        }
+
+        messageChannel =
+          supabase
+            .channel(
+              `chat-list-messages:${user.id}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table: 'messages',
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+
+        readChannel =
+          supabase
+            .channel(
+              `chat-list-reads:${user.id}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'message_reads',
+              },
+              async (
+                payload
+              ) => {
+                const row =
+                  (
+                    payload.new ??
+                    payload.old
+                  ) as {
+                    user_id?:
+                      string;
+                  };
+
+                if (
+                  row.user_id ===
+                  user.id
+                ) {
+                  await loadChats(
+                    false
+                  );
+                }
+              }
+            )
+            .subscribe();
+
+        muteChannel =
+          supabase
+            .channel(
+              `chat-list-mutes:${user.id}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'muted_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+      };
+
+    subscribeToRealtime();
+
+    return () => {
+      cancelled = true;
+
+      if (
+        messageChannel
+      ) {
+        supabase.removeChannel(
+          messageChannel
+        );
+      }
+
+      if (
+        readChannel
+      ) {
+        supabase.removeChannel(
+          readChannel
+        );
+      }
+
+      if (
+        muteChannel
+      ) {
+        supabase.removeChannel(
+          muteChannel
+        );
+      }
+    };
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadChats();
     }, [])
   );
 
-  const loadChats = async () => {
+  const loadChats = async (
+    showLoader = true
+  ) => {
     try {
-      setLoading(true);
+      if (showLoader) {
+        setLoading(true);
+      }
 
       const {
         data: { user },
@@ -125,6 +272,43 @@ export default function ChatsScreen() {
         );
         return;
       }
+
+      const {
+        data: mutedRows,
+        error: mutedError,
+      } = await supabase
+        .from(
+          'muted_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (mutedError) {
+        console.error(
+          'Muted conversations load error:',
+          mutedError
+        );
+      }
+
+      const mutedIds =
+        new Set(
+          (
+            mutedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
 
       const chatItems =
         await Promise.all(
@@ -339,6 +523,11 @@ export default function ChatsScreen() {
                   conversation.is_group,
 
                 unreadCount,
+
+                isMuted:
+                  mutedIds.has(
+                    conversation.id
+                  ),
               };
             }
           )
@@ -376,9 +565,139 @@ export default function ChatsScreen() {
         'Please try again.'
       );
     } finally {
-      setLoading(false);
+      if (showLoader) {
+        setLoading(false);
+      }
     }
   };
+
+  const toggleMute =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      if (chat.isMuted) {
+        const {
+          error,
+        } = await supabase
+          .from(
+            'muted_conversations'
+          )
+          .delete()
+          .eq(
+            'user_id',
+            user.id
+          )
+          .eq(
+            'conversation_id',
+            chat.id
+          );
+
+        if (error) {
+          Alert.alert(
+            'Unable to unmute',
+            error.message
+          );
+          return;
+        }
+
+        setChats(
+          (current) =>
+            current.map(
+              (item) =>
+                item.id ===
+                chat.id
+                  ? {
+                      ...item,
+                      isMuted: false,
+                    }
+                  : item
+            )
+        );
+
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from(
+          'muted_conversations'
+        )
+        .insert({
+          user_id:
+            user.id,
+          conversation_id:
+            chat.id,
+        });
+
+      if (error) {
+        Alert.alert(
+          'Unable to mute',
+          error.message
+        );
+        return;
+      }
+
+      setChats(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              chat.id
+                ? {
+                    ...item,
+                    isMuted: true,
+                  }
+                : item
+          )
+      );
+    };
+
+  const showChatActions =
+    (
+      chat: ChatListItem
+    ) => {
+      Alert.alert(
+        chat.displayName,
+        chat.isMuted
+          ? 'Notifications are muted for this conversation.'
+          : 'Choose an action.',
+        [
+          {
+            text:
+              chat.isMuted
+                ? 'Unmute Notifications'
+                : 'Mute Notifications',
+            onPress: () =>
+              toggleMute(
+                chat
+              ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
 
   const showNewChatMenu =
     () => {
@@ -672,6 +991,14 @@ export default function ChatsScreen() {
                     },
                   })
                 }
+                onLongPress={() =>
+                  showChatActions(
+                    chat
+                  )
+                }
+                delayLongPress={
+                  350
+                }
               >
                 <View
                   style={[
@@ -729,6 +1056,16 @@ export default function ChatsScreen() {
                           }
                         >
                           GROUP
+                        </Text>
+                      )}
+
+                      {chat.isMuted && (
+                        <Text
+                          style={
+                            styles.mutedLabel
+                          }
+                        >
+                          MUTED
                         </Text>
                       )}
                     </View>
@@ -1085,6 +1422,20 @@ const styles =
         '#027A48',
       backgroundColor:
         '#ECFDF3',
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
+
+    mutedLabel: {
+      marginLeft: 8,
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      color:
+        '#667085',
+      backgroundColor:
+        '#F2F4F7',
       paddingHorizontal: 6,
       paddingVertical: 3,
       borderRadius: 5,

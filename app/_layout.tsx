@@ -210,6 +210,37 @@ export default function RootLayout() {
         return;
       }
 
+      const {
+        data: mutedConversation,
+        error: mutedError,
+      } = await supabase
+        .from(
+          'muted_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          currentUserId
+        )
+        .eq(
+          'conversation_id',
+          newMessage.conversation_id
+        )
+        .maybeSingle();
+
+      if (mutedError) {
+        console.error(
+          'Mute check error:',
+          mutedError
+        );
+      }
+
+      if (mutedConversation) {
+        return;
+      }
+
       const viewingThisConversation =
         pathname ===
           '/conversation' &&
