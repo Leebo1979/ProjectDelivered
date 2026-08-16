@@ -40,6 +40,7 @@ type Reaction = {
 type ReadMap = Record<string, boolean>;
 type FavouriteMap = Record<string, boolean>;
 type ReactionMap = Record<string, string[]>;
+type SenderNameMap = Record<string, string>;
 
 export default function ConversationScreen() {
   const { conversationId } = useLocalSearchParams<{
@@ -72,6 +73,9 @@ export default function ConversationScreen() {
   const [reactionMap, setReactionMap] =
     useState<ReactionMap>({});
 
+  const [senderNameMap, setSenderNameMap] =
+    useState<SenderNameMap>({});
+
   const [replyingTo, setReplyingTo] =
     useState<Message | null>(null);
 
@@ -96,25 +100,41 @@ export default function ConversationScreen() {
           filter: `conversation_id=eq.${conversationId}`,
         },
         async (payload) => {
-          const newMessage = payload.new as Message;
+          const newMessage =
+            payload.new as Message;
 
           setMessages((current) => {
-            const exists = current.some(
-              (item) => item.id === newMessage.id
-            );
+            const exists =
+              current.some(
+                (item) =>
+                  item.id ===
+                  newMessage.id
+              );
 
             if (exists) {
               return current;
             }
 
-            return [...current, newMessage];
+            return [
+              ...current,
+              newMessage,
+            ];
           });
+
+          if (isGroup) {
+            await ensureSenderName(
+              newMessage.sender_id
+            );
+          }
 
           if (
             currentUserId &&
-            newMessage.sender_id !== currentUserId
+            newMessage.sender_id !==
+              currentUserId
           ) {
-            await markMessageRead(newMessage.id);
+            await markMessageRead(
+              newMessage.id
+            );
           }
         }
       )
@@ -127,14 +147,17 @@ export default function ConversationScreen() {
           filter: `conversation_id=eq.${conversationId}`,
         },
         (payload) => {
-          const updated = payload.new as Message & {
-            deleted_at?: string | null;
-          };
+          const updated =
+            payload.new as Message & {
+              deleted_at?: string | null;
+            };
 
           if (updated.deleted_at) {
             setMessages((current) =>
               current.filter(
-                (item) => item.id !== updated.id
+                (item) =>
+                  item.id !==
+                  updated.id
               )
             );
 
@@ -146,8 +169,10 @@ export default function ConversationScreen() {
               item.id === updated.id
                 ? {
                     ...item,
-                    body: updated.body,
-                    edited_at: updated.edited_at,
+                    body:
+                      updated.body,
+                    edited_at:
+                      updated.edited_at,
                   }
                 : item
             )
@@ -166,213 +191,367 @@ export default function ConversationScreen() {
           table: 'message_reads',
         },
         (payload) => {
-          const read = payload.new as {
-            message_id: string;
-            user_id: string;
-          };
+          const read =
+            payload.new as {
+              message_id: string;
+              user_id: string;
+            };
 
-          if (read.user_id !== currentUserId) {
-            setReadMap((current) => ({
-              ...current,
-              [read.message_id]: true,
-            }));
+          if (
+            read.user_id !==
+            currentUserId
+          ) {
+            setReadMap(
+              (current) => ({
+                ...current,
+                [read.message_id]:
+                  true,
+              })
+            );
           }
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(messageChannel);
-      supabase.removeChannel(readChannel);
+      supabase.removeChannel(
+        messageChannel
+      );
+
+      supabase.removeChannel(
+        readChannel
+      );
     };
-  }, [conversationId, currentUserId]);
+  }, [
+    conversationId,
+    currentUserId,
+    isGroup,
+  ]);
 
   useEffect(() => {
-    if (messages.length === 0) {
+    if (
+      messages.length === 0
+    ) {
       return;
     }
 
-    const timer = setTimeout(() => {
-      listRef.current?.scrollToEnd({
-        animated: true,
-      });
-    }, 100);
+    const timer =
+      setTimeout(() => {
+        listRef.current?.scrollToEnd({
+          animated: true,
+        });
+      }, 100);
 
-    return () => clearTimeout(timer);
+    return () =>
+      clearTimeout(timer);
   }, [messages]);
 
-  const loadConversation = async () => {
-    try {
-      setLoading(true);
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        console.error(
-          'User load error:',
-          userError
-        );
+  const ensureSenderName =
+    async (
+      senderId: string
+    ) => {
+      if (
+        senderNameMap[
+          senderId
+        ]
+      ) {
         return;
       }
 
-      setCurrentUserId(user.id);
-
       const {
-        data: conversation,
-        error: conversationError,
+        data: profile,
       } = await supabase
-        .from('conversations')
-        .select('id, title, is_group')
-        .eq('id', conversationId)
-        .single();
+        .from('profiles')
+        .select('display_name')
+        .eq(
+          'id',
+          senderId
+        )
+        .maybeSingle();
 
-      if (conversationError) {
-        console.error(
-          'Conversation load error:',
-          conversationError
+      if (profile) {
+        setSenderNameMap(
+          (current) => ({
+            ...current,
+            [senderId]:
+              profile.display_name,
+          })
         );
       }
+    };
 
-      if (conversation) {
-        setIsGroup(conversation.is_group);
+  const loadSenderNames =
+    async (
+      loadedMessages: Message[]
+    ) => {
+      const uniqueSenderIds =
+        [
+          ...new Set(
+            loadedMessages.map(
+              (item) =>
+                item.sender_id
+            )
+          ),
+        ];
 
-        if (conversation.is_group) {
-          setOtherUser(null);
-
-          setConversationTitle(
-            conversation.title ??
-              'Group Conversation'
-          );
-        } else {
-          const {
-            data: members,
-            error: membersError,
-          } = await supabase
-            .from('conversation_members')
-            .select('user_id')
-            .eq(
-              'conversation_id',
-              conversationId
-            );
-
-          if (!membersError) {
-            const otherMember =
-              members?.find(
-                (member) =>
-                  member.user_id !== user.id
-              );
-
-            if (otherMember) {
-              const {
-                data: profile,
-              } = await supabase
-                .from('profiles')
-                .select(
-                  'display_name, username'
-                )
-                .eq(
-                  'id',
-                  otherMember.user_id
-                )
-                .maybeSingle();
-
-              if (profile) {
-                setOtherUser(profile);
-
-                setConversationTitle(
-                  profile.display_name
-                );
-              }
-            }
-          }
-        }
+      if (
+        uniqueSenderIds.length ===
+        0
+      ) {
+        return;
       }
 
       const {
-        data,
+        data: profiles,
         error,
       } = await supabase
-        .from('messages')
+        .from('profiles')
         .select(
-          `
-          id,
-          body,
-          sender_id,
-          created_at,
-          edited_at,
-          parent_message_id
-          `
+          'id, display_name'
         )
-        .eq(
-          'conversation_id',
-          conversationId
-        )
-        .is(
-          'deleted_at',
-          null
-        )
-        .order(
-          'created_at',
-          {
-            ascending: true,
-          }
+        .in(
+          'id',
+          uniqueSenderIds
         );
 
       if (error) {
         console.error(
-          'Message load error:',
+          'Sender profile load error:',
           error
         );
         return;
       }
 
-      const loadedMessages =
-        data ?? [];
-
-      setMessages(
-        loadedMessages
-      );
+      const nextMap:
+        SenderNameMap = {};
 
       for (
-        const item
-        of loadedMessages
+        const profile
+        of profiles ?? []
       ) {
-        if (
-          item.sender_id !==
-          user.id
-        ) {
-          await markMessageRead(
-            item.id,
-            user.id
-          );
-        }
+        nextMap[
+          profile.id
+        ] =
+          profile.display_name;
       }
 
-      await loadReadReceipts(
-        loadedMessages,
-        user.id
+      setSenderNameMap(
+        nextMap
       );
+    };
 
-      await loadFavourites(
-        loadedMessages,
-        user.id
-      );
+  const loadConversation =
+    async () => {
+      try {
+        setLoading(true);
 
-      await loadReactions(
-        loadedMessages
-      );
-    } catch (error) {
-      console.error(
-        'Conversation load error:',
-        error
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
+        const {
+          data: { user },
+          error: userError,
+        } =
+          await supabase.auth.getUser();
+
+        if (
+          userError ||
+          !user
+        ) {
+          console.error(
+            'User load error:',
+            userError
+          );
+          return;
+        }
+
+        setCurrentUserId(
+          user.id
+        );
+
+        const {
+          data: conversation,
+          error:
+            conversationError,
+        } = await supabase
+          .from(
+            'conversations'
+          )
+          .select(
+            'id, title, is_group'
+          )
+          .eq(
+            'id',
+            conversationId
+          )
+          .single();
+
+        if (
+          conversationError
+        ) {
+          console.error(
+            'Conversation load error:',
+            conversationError
+          );
+        }
+
+        if (conversation) {
+          setIsGroup(
+            conversation.is_group
+          );
+
+          if (
+            conversation.is_group
+          ) {
+            setOtherUser(null);
+
+            setConversationTitle(
+              conversation.title ??
+                'Group Conversation'
+            );
+          } else {
+            const {
+              data: members,
+              error:
+                membersError,
+            } = await supabase
+              .from(
+                'conversation_members'
+              )
+              .select('user_id')
+              .eq(
+                'conversation_id',
+                conversationId
+              );
+
+            if (!membersError) {
+              const otherMember =
+                members?.find(
+                  (member) =>
+                    member.user_id !==
+                    user.id
+                );
+
+              if (
+                otherMember
+              ) {
+                const {
+                  data: profile,
+                } =
+                  await supabase
+                    .from(
+                      'profiles'
+                    )
+                    .select(
+                      'display_name, username'
+                    )
+                    .eq(
+                      'id',
+                      otherMember.user_id
+                    )
+                    .maybeSingle();
+
+                if (profile) {
+                  setOtherUser(
+                    profile
+                  );
+
+                  setConversationTitle(
+                    profile.display_name
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        const {
+          data,
+          error,
+        } = await supabase
+          .from('messages')
+          .select(
+            `
+            id,
+            body,
+            sender_id,
+            created_at,
+            edited_at,
+            parent_message_id
+            `
+          )
+          .eq(
+            'conversation_id',
+            conversationId
+          )
+          .is(
+            'deleted_at',
+            null
+          )
+          .order(
+            'created_at',
+            {
+              ascending: true,
+            }
+          );
+
+        if (error) {
+          console.error(
+            'Message load error:',
+            error
+          );
+          return;
+        }
+
+        const loadedMessages =
+          data ?? [];
+
+        setMessages(
+          loadedMessages
+        );
+
+        if (
+          conversation?.is_group
+        ) {
+          await loadSenderNames(
+            loadedMessages
+          );
+        }
+
+        for (
+          const item
+          of loadedMessages
+        ) {
+          if (
+            item.sender_id !==
+            user.id
+          ) {
+            await markMessageRead(
+              item.id,
+              user.id
+            );
+          }
+        }
+
+        await loadReadReceipts(
+          loadedMessages,
+          user.id
+        );
+
+        await loadFavourites(
+          loadedMessages,
+          user.id
+        );
+
+        await loadReactions(
+          loadedMessages
+        );
+      } catch (error) {
+        console.error(
+          'Conversation load error:',
+          error
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
 
   const loadReadReceipts =
     async (
@@ -391,7 +570,9 @@ export default function ConversationScreen() {
               item.id
           );
 
-      if (sentIds.length === 0) {
+      if (
+        sentIds.length === 0
+      ) {
         return;
       }
 
@@ -438,7 +619,9 @@ export default function ConversationScreen() {
           (item) => item.id
         );
 
-      if (ids.length === 0) {
+      if (
+        ids.length === 0
+      ) {
         return;
       }
 
@@ -481,10 +664,13 @@ export default function ConversationScreen() {
     ) => {
       const ids =
         loadedMessages.map(
-          (item) => item.id
+          (item) =>
+            item.id
         );
 
-      if (ids.length === 0) {
+      if (
+        ids.length === 0
+      ) {
         return;
       }
 
@@ -507,7 +693,8 @@ export default function ConversationScreen() {
 
       for (
         const reaction
-        of (data ?? []) as Reaction[]
+        of (data ??
+          []) as Reaction[]
       ) {
         if (
           !nextMap[
@@ -554,23 +741,24 @@ export default function ConversationScreen() {
         return;
       }
 
-      const { error } =
-        await supabase
-          .from(
-            'message_reads'
-          )
-          .upsert(
-            {
-              message_id:
-                messageId,
-              user_id:
-                userId,
-            },
-            {
-              onConflict:
-                'message_id,user_id',
-            }
-          );
+      const {
+        error,
+      } = await supabase
+        .from(
+          'message_reads'
+        )
+        .upsert(
+          {
+            message_id:
+              messageId,
+            user_id:
+              userId,
+          },
+          {
+            onConflict:
+              'message_id,user_id',
+          }
+        );
 
       if (error) {
         console.error(
@@ -685,20 +873,21 @@ export default function ConversationScreen() {
         ];
 
       if (isFavourite) {
-        const { error } =
-          await supabase
-            .from(
-              'favourite_messages'
-            )
-            .delete()
-            .eq(
-              'message_id',
-              item.id
-            )
-            .eq(
-              'user_id',
-              currentUserId
-            );
+        const {
+          error,
+        } = await supabase
+          .from(
+            'favourite_messages'
+          )
+          .delete()
+          .eq(
+            'message_id',
+            item.id
+          )
+          .eq(
+            'user_id',
+            currentUserId
+          );
 
         if (!error) {
           setFavouriteMap(
@@ -713,17 +902,18 @@ export default function ConversationScreen() {
         return;
       }
 
-      const { error } =
-        await supabase
-          .from(
-            'favourite_messages'
-          )
-          .insert({
-            message_id:
-              item.id,
-            user_id:
-              currentUserId,
-          });
+      const {
+        error,
+      } = await supabase
+        .from(
+          'favourite_messages'
+        )
+        .insert({
+          message_id:
+            item.id,
+          user_id:
+            currentUserId,
+        });
 
       if (!error) {
         setFavouriteMap(
@@ -745,24 +935,25 @@ export default function ConversationScreen() {
         return;
       }
 
-      const { error } =
-        await supabase
-          .from(
-            'message_reactions'
-          )
-          .upsert(
-            {
-              message_id:
-                item.id,
-              user_id:
-                currentUserId,
-              emoji,
-            },
-            {
-              onConflict:
-                'message_id,user_id,emoji',
-            }
-          );
+      const {
+        error,
+      } = await supabase
+        .from(
+          'message_reactions'
+        )
+        .upsert(
+          {
+            message_id:
+              item.id,
+            user_id:
+              currentUserId,
+            emoji,
+          },
+          {
+            onConflict:
+              'message_id,user_id,emoji',
+          }
+        );
 
       if (!error) {
         await loadReactions(
@@ -816,7 +1007,8 @@ export default function ConversationScreen() {
       item: Message
     ) => {
       if (
-        Platform.OS !== 'ios'
+        Platform.OS !==
+        'ios'
       ) {
         Alert.alert(
           'Edit Message',
@@ -834,26 +1026,29 @@ export default function ConversationScreen() {
 
           if (
             !trimmed ||
-            trimmed === item.body
+            trimmed ===
+              item.body
           ) {
             return;
           }
 
           const editedAt =
-            new Date().toISOString();
+            new Date()
+              .toISOString();
 
-          const { error } =
-            await supabase
-              .from('messages')
-              .update({
-                body: trimmed,
-                edited_at:
-                  editedAt,
-              })
-              .eq(
-                'id',
-                item.id
-              );
+          const {
+            error,
+          } = await supabase
+            .from('messages')
+            .update({
+              body: trimmed,
+              edited_at:
+                editedAt,
+            })
+            .eq(
+              'id',
+              item.id
+            );
 
           if (error) {
             Alert.alert(
@@ -871,7 +1066,8 @@ export default function ConversationScreen() {
                   item.id
                     ? {
                         ...message,
-                        body: trimmed,
+                        body:
+                          trimmed,
                         edited_at:
                           editedAt,
                       }
@@ -888,18 +1084,19 @@ export default function ConversationScreen() {
     async (
       item: Message
     ) => {
-      const { error } =
-        await supabase
-          .from('messages')
-          .update({
-            deleted_at:
-              new Date()
-                .toISOString(),
-          })
-          .eq(
-            'id',
-            item.id
-          );
+      const {
+        error,
+      } = await supabase
+        .from('messages')
+        .update({
+          deleted_at:
+            new Date()
+              .toISOString(),
+        })
+        .eq(
+          'id',
+          item.id
+        );
 
       if (!error) {
         setMessages(
@@ -942,40 +1139,40 @@ export default function ConversationScreen() {
     (
       item: Message
     ) => {
-      const actions: any[] =
-        [
-          {
-            text: 'Copy',
-            onPress: () =>
-              copyMessage(item),
-          },
-          {
-            text: 'Reply',
-            onPress: () =>
-              setReplyingTo(
-                item
-              ),
-          },
-          {
-            text:
-              favouriteMap[
-                item.id
-              ]
-                ? 'Remove Favourite'
-                : 'Favourite',
-            onPress: () =>
-              toggleFavourite(
-                item
-              ),
-          },
-          {
-            text: 'React',
-            onPress: () =>
-              showReactionPicker(
-                item
-              ),
-          },
-        ];
+      const actions:
+        any[] = [
+        {
+          text: 'Copy',
+          onPress: () =>
+            copyMessage(item),
+        },
+        {
+          text: 'Reply',
+          onPress: () =>
+            setReplyingTo(
+              item
+            ),
+        },
+        {
+          text:
+            favouriteMap[
+              item.id
+            ]
+              ? 'Remove Favourite'
+              : 'Favourite',
+          onPress: () =>
+            toggleFavourite(
+              item
+            ),
+        },
+        {
+          text: 'React',
+          onPress: () =>
+            showReactionPicker(
+              item
+            ),
+        },
+      ];
 
       if (
         item.sender_id ===
@@ -992,7 +1189,9 @@ export default function ConversationScreen() {
           style:
             'destructive',
           onPress: () =>
-            confirmDelete(item),
+            confirmDelete(
+              item
+            ),
         });
       }
 
@@ -1010,7 +1209,8 @@ export default function ConversationScreen() {
 
   const findParentMessage =
     (
-      parentId: string | null
+      parentId:
+        string | null
     ) => {
       if (!parentId) {
         return null;
@@ -1059,18 +1259,25 @@ export default function ConversationScreen() {
 
   return (
     <SafeAreaView
-      style={styles.safeArea}
+      style={
+        styles.safeArea
+      }
     >
       <KeyboardAvoidingView
-        style={styles.screen}
+        style={
+          styles.screen
+        }
         behavior={
-          Platform.OS === 'ios'
+          Platform.OS ===
+          'ios'
             ? 'padding'
             : undefined
         }
       >
         <View
-          style={styles.header}
+          style={
+            styles.header
+          }
         >
           <Pressable
             style={
@@ -1090,7 +1297,9 @@ export default function ConversationScreen() {
           </Pressable>
 
           <Pressable
-            disabled={!isGroup}
+            disabled={
+              !isGroup
+            }
             onPress={
               openConversationDetails
             }
@@ -1101,7 +1310,9 @@ export default function ConversationScreen() {
             ]}
           >
             <View
-              style={styles.avatar}
+              style={
+                styles.avatar
+              }
             >
               <Text
                 style={
@@ -1125,8 +1336,12 @@ export default function ConversationScreen() {
                 }
               >
                 <Text
-                  style={styles.name}
-                  numberOfLines={1}
+                  style={
+                    styles.name
+                  }
+                  numberOfLines={
+                    1
+                  }
                 >
                   {conversationTitle}
                 </Text>
@@ -1172,10 +1387,9 @@ export default function ConversationScreen() {
           <FlatList
             ref={listRef}
             data={messages}
-            keyExtractor={
-              (item) =>
-                item.id
-            }
+            keyExtractor={(
+              item
+            ) => item.id}
             contentContainerStyle={
               styles.messageList
             }
@@ -1201,6 +1415,12 @@ export default function ConversationScreen() {
                   item.id
                 ] ?? [];
 
+              const senderName =
+                senderNameMap[
+                  item.sender_id
+                ] ??
+                'Unknown';
+
               return (
                 <Pressable
                   onLongPress={() =>
@@ -1224,6 +1444,17 @@ export default function ConversationScreen() {
                         styles.messageGroupSent,
                     ]}
                   >
+                    {isGroup &&
+                      !sentByMe && (
+                        <Text
+                          style={
+                            styles.senderName
+                          }
+                        >
+                          {senderName}
+                        </Text>
+                      )}
+
                     {parent && (
                       <View
                         style={
@@ -1395,7 +1626,9 @@ export default function ConversationScreen() {
                 : 'Message'
             }
             placeholderTextColor="#98A2B3"
-            style={styles.input}
+            style={
+              styles.input
+            }
             multiline
           />
 
@@ -1555,6 +1788,14 @@ const styles =
     messageGroupSent: {
       alignItems:
         'flex-end',
+    },
+
+    senderName: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#4169E1',
+      marginLeft: 8,
+      marginBottom: 4,
     },
 
     replyPreview: {
