@@ -19,6 +19,7 @@ export default function RootLayout() {
         <Stack.Screen name="chats" />
         <Stack.Screen name="conversation" />
         <Stack.Screen name="find-user" />
+        <Stack.Screen name="favourites" />
       </Stack>
 
       <StatusBar style="dark" />

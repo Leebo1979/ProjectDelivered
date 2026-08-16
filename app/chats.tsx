@@ -282,12 +282,9 @@ export default function ChatsScreen() {
     const now = new Date();
 
     const sameDay =
-      date.getFullYear() ===
-        now.getFullYear() &&
-      date.getMonth() ===
-        now.getMonth() &&
-      date.getDate() ===
-        now.getDate();
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate();
 
     if (sameDay) {
       return date.toLocaleTimeString([], {
@@ -303,9 +300,7 @@ export default function ChatsScreen() {
   };
 
   return (
-    <SafeAreaView
-      style={styles.safeArea}
-    >
+    <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <View style={styles.header}>
           <View>
@@ -318,18 +313,33 @@ export default function ChatsScreen() {
             </Text>
           </View>
 
-          <Pressable
-            style={styles.newChatButton}
-            onPress={() =>
-              router.push('/find-user')
-            }
-          >
-            <Text
-              style={styles.newChatText}
+          <View style={styles.headerActions}>
+            <Pressable
+              style={styles.favouritesButton}
+              onPress={() =>
+                router.push('/favourites')
+              }
             >
-              +
-            </Text>
-          </Pressable>
+              <Text
+                style={styles.favouritesText}
+              >
+                ★
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.newChatButton}
+              onPress={() =>
+                router.push('/find-user')
+              }
+            >
+              <Text
+                style={styles.newChatText}
+              >
+                +
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
         <Text style={styles.sectionTitle}>
@@ -383,14 +393,10 @@ export default function ChatsScreen() {
               </View>
 
               <View
-                style={
-                  styles.chatContent
-                }
+                style={styles.chatContent}
               >
                 <View
-                  style={
-                    styles.chatTopRow
-                  }
+                  style={styles.chatTopRow}
                 >
                   <Text
                     style={styles.name}
@@ -409,9 +415,7 @@ export default function ChatsScreen() {
                 </View>
 
                 <View
-                  style={
-                    styles.previewRow
-                  }
+                  style={styles.previewRow}
                 >
                   <Text
                     style={styles.preview}
@@ -423,9 +427,7 @@ export default function ChatsScreen() {
 
                 {chat.username && (
                   <Text
-                    style={
-                      styles.username
-                    }
+                    style={styles.username}
                   >
                     @{chat.username}
                   </Text>
@@ -436,14 +438,10 @@ export default function ChatsScreen() {
         )}
 
         <View
-          style={
-            styles.developmentSection
-          }
+          style={styles.developmentSection}
         >
           <Text
-            style={
-              styles.developmentLabel
-            }
+            style={styles.developmentLabel}
           >
             DEVELOPMENT
           </Text>
@@ -453,9 +451,7 @@ export default function ChatsScreen() {
             onPress={signOut}
           >
             <Text
-              style={
-                styles.devButtonText
-              }
+              style={styles.devButtonText}
             >
               Sign Out
             </Text>
@@ -468,9 +464,7 @@ export default function ChatsScreen() {
             }
           >
             <Text
-              style={
-                styles.devButtonText
-              }
+              style={styles.devButtonText}
             >
               Reset Onboarding
             </Text>
@@ -500,6 +494,11 @@ const styles = StyleSheet.create({
     marginBottom: 34,
   },
 
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
   eyebrow: {
     fontSize: 12,
     fontWeight: '700',
@@ -512,6 +511,23 @@ const styles = StyleSheet.create({
     fontSize: 38,
     fontWeight: '800',
     color: '#101828',
+  },
+
+  favouritesButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D0D5DD',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+
+  favouritesText: {
+    fontSize: 22,
+    color: '#F79009',
   },
 
   newChatButton: {
