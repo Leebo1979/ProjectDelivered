@@ -1,7 +1,9 @@
+import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -20,6 +22,8 @@ type Message = {
   body: string;
   sender_id: string;
   created_at: string;
+  edited_at: string | null;
+  parent_message_id: string | null;
 };
 
 type OtherUser = {
@@ -27,7 +31,15 @@ type OtherUser = {
   username: string;
 };
 
+type Reaction = {
+  message_id: string;
+  emoji: string;
+  user_id: string;
+};
+
 type ReadMap = Record<string, boolean>;
+type FavouriteMap = Record<string, boolean>;
+type ReactionMap = Record<string, string[]>;
 
 export default function ConversationScreen() {
   const { conversationId } = useLocalSearchParams<{
@@ -51,7 +63,17 @@ export default function ConversationScreen() {
   const [readMap, setReadMap] =
     useState<ReadMap>({});
 
-  const listRef = useRef<FlatList<Message>>(null);
+  const [favouriteMap, setFavouriteMap] =
+    useState<FavouriteMap>({});
+
+  const [reactionMap, setReactionMap] =
+    useState<ReactionMap>({});
+
+  const [replyingTo, setReplyingTo] =
+    useState<Message | null>(null);
+
+  const listRef =
+    useRef<FlatList<Message>>(null);
 
   useEffect(() => {
     if (!conversationId) {
@@ -93,6 +115,42 @@ export default function ConversationScreen() {
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const updated = payload.new as Message & {
+            deleted_at?: string | null;
+          };
+
+          if (updated.deleted_at) {
+            setMessages((current) =>
+              current.filter(
+                (item) => item.id !== updated.id
+              )
+            );
+
+            return;
+          }
+
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === updated.id
+                ? {
+                    ...item,
+                    body: updated.body,
+                    edited_at: updated.edited_at,
+                  }
+                : item
+            )
+          );
+        }
+      )
       .subscribe();
 
     const readChannel = supabase
@@ -104,15 +162,13 @@ export default function ConversationScreen() {
           schema: 'public',
           table: 'message_reads',
         },
-        async (payload) => {
+        (payload) => {
           const read = payload.new as {
             message_id: string;
             user_id: string;
           };
 
-          if (
-            read.user_id !== currentUserId
-          ) {
+          if (read.user_id !== currentUserId) {
             setReadMap((current) => ({
               ...current,
               [read.message_id]: true,
@@ -152,7 +208,10 @@ export default function ConversationScreen() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        console.error('User load error:', userError);
+        console.error(
+          'User load error:',
+          userError
+        );
         return;
       }
 
@@ -177,7 +236,8 @@ export default function ConversationScreen() {
       if (conversation) {
         if (conversation.is_group) {
           setConversationTitle(
-            conversation.title ?? 'Group Conversation'
+            conversation.title ??
+              'Group Conversation'
           );
         } else {
           const {
@@ -191,12 +251,7 @@ export default function ConversationScreen() {
               conversationId
             );
 
-          if (membersError) {
-            console.error(
-              'Members load error:',
-              membersError
-            );
-          } else {
+          if (!membersError) {
             const otherMember =
               members?.find(
                 (member) =>
@@ -206,7 +261,6 @@ export default function ConversationScreen() {
             if (otherMember) {
               const {
                 data: profile,
-                error: profileError,
               } = await supabase
                 .from('profiles')
                 .select(
@@ -218,41 +272,47 @@ export default function ConversationScreen() {
                 )
                 .maybeSingle();
 
-              if (profileError) {
-                console.error(
-                  'Profile load error:',
-                  profileError
-                );
-              }
-
               if (profile) {
                 setOtherUser(profile);
+
                 setConversationTitle(
                   profile.display_name
                 );
               }
-            } else {
-              setConversationTitle(
-                conversation.title ?? 'Conversation'
-              );
             }
           }
         }
       }
 
-      const { data, error } = await supabase
+      const {
+        data,
+        error,
+      } = await supabase
         .from('messages')
         .select(
-          'id, body, sender_id, created_at'
+          `
+          id,
+          body,
+          sender_id,
+          created_at,
+          edited_at,
+          parent_message_id
+          `
         )
         .eq(
           'conversation_id',
           conversationId
         )
-        .is('deleted_at', null)
-        .order('created_at', {
-          ascending: true,
-        });
+        .is(
+          'deleted_at',
+          null
+        )
+        .order(
+          'created_at',
+          {
+            ascending: true,
+          }
+        );
 
       if (error) {
         console.error(
@@ -262,53 +322,41 @@ export default function ConversationScreen() {
         return;
       }
 
-      const loadedMessages = data ?? [];
+      const loadedMessages =
+        data ?? [];
 
-      setMessages(loadedMessages);
-
-      const incomingMessages =
-        loadedMessages.filter(
-          (item) =>
-            item.sender_id !== user.id
-        );
-
-      for (const item of incomingMessages) {
-        await markMessageRead(item.id);
-      }
-
-      const sentMessageIds =
+      setMessages(
         loadedMessages
-          .filter(
-            (item) =>
-              item.sender_id === user.id
-          )
-          .map((item) => item.id);
+      );
 
-      if (sentMessageIds.length > 0) {
-        const {
-          data: reads,
-          error: readsError,
-        } = await supabase
-          .from('message_reads')
-          .select('message_id, user_id')
-          .in(
-            'message_id',
-            sentMessageIds
-          )
-          .neq('user_id', user.id);
-
-        if (!readsError) {
-          const nextReadMap: ReadMap = {};
-
-          for (const read of reads ?? []) {
-            nextReadMap[
-              read.message_id
-            ] = true;
-          }
-
-          setReadMap(nextReadMap);
+      for (
+        const item
+        of loadedMessages
+      ) {
+        if (
+          item.sender_id !==
+          user.id
+        ) {
+          await markMessageRead(
+            item.id,
+            user.id
+          );
         }
       }
+
+      await loadReadReceipts(
+        loadedMessages,
+        user.id
+      );
+
+      await loadFavourites(
+        loadedMessages,
+        user.id
+      );
+
+      await loadReactions(
+        loadedMessages
+      );
     } catch (error) {
       console.error(
         'Conversation load error:',
@@ -319,30 +367,203 @@ export default function ConversationScreen() {
     }
   };
 
-  const markMessageRead = async (
-    messageId: string
-  ) => {
-    if (!currentUserId) {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+  const loadReadReceipts =
+    async (
+      loadedMessages: Message[],
+      userId: string
+    ) => {
+      const sentIds =
+        loadedMessages
+          .filter(
+            (item) =>
+              item.sender_id ===
+              userId
+          )
+          .map(
+            (item) =>
+              item.id
+          );
 
-      if (!user) {
+      if (sentIds.length === 0) {
         return;
       }
 
-      const { error } = await supabase
-        .from('message_reads')
-        .upsert(
-          {
-            message_id: messageId,
-            user_id: user.id,
-          },
-          {
-            onConflict:
-              'message_id,user_id',
-          }
+      const {
+        data: reads,
+      } = await supabase
+        .from(
+          'message_reads'
+        )
+        .select(
+          'message_id, user_id'
+        )
+        .in(
+          'message_id',
+          sentIds
+        )
+        .neq(
+          'user_id',
+          userId
         );
+
+      const nextMap:
+        ReadMap = {};
+
+      for (
+        const read
+        of reads ?? []
+      ) {
+        nextMap[
+          read.message_id
+        ] = true;
+      }
+
+      setReadMap(nextMap);
+    };
+
+  const loadFavourites =
+    async (
+      loadedMessages: Message[],
+      userId: string
+    ) => {
+      const ids =
+        loadedMessages.map(
+          (item) => item.id
+        );
+
+      if (ids.length === 0) {
+        return;
+      }
+
+      const {
+        data,
+      } = await supabase
+        .from(
+          'favourite_messages'
+        )
+        .select('message_id')
+        .eq(
+          'user_id',
+          userId
+        )
+        .in(
+          'message_id',
+          ids
+        );
+
+      const nextMap:
+        FavouriteMap = {};
+
+      for (
+        const item
+        of data ?? []
+      ) {
+        nextMap[
+          item.message_id
+        ] = true;
+      }
+
+      setFavouriteMap(
+        nextMap
+      );
+    };
+
+  const loadReactions =
+    async (
+      loadedMessages: Message[]
+    ) => {
+      const ids =
+        loadedMessages.map(
+          (item) => item.id
+        );
+
+      if (ids.length === 0) {
+        return;
+      }
+
+      const {
+        data,
+      } = await supabase
+        .from(
+          'message_reactions'
+        )
+        .select(
+          'message_id, emoji, user_id'
+        )
+        .in(
+          'message_id',
+          ids
+        );
+
+      const nextMap:
+        ReactionMap = {};
+
+      for (
+        const reaction
+        of (data ?? []) as Reaction[]
+      ) {
+        if (
+          !nextMap[
+            reaction.message_id
+          ]
+        ) {
+          nextMap[
+            reaction.message_id
+          ] = [];
+        }
+
+        nextMap[
+          reaction.message_id
+        ].push(
+          reaction.emoji
+        );
+      }
+
+      setReactionMap(
+        nextMap
+      );
+    };
+
+  const markMessageRead =
+    async (
+      messageId: string,
+      explicitUserId?: string
+    ) => {
+      let userId =
+        explicitUserId ??
+        currentUserId;
+
+      if (!userId) {
+        const {
+          data: { user },
+        } =
+          await supabase.auth.getUser();
+
+        userId =
+          user?.id ?? null;
+      }
+
+      if (!userId) {
+        return;
+      }
+
+      const { error } =
+        await supabase
+          .from(
+            'message_reads'
+          )
+          .upsert(
+            {
+              message_id:
+                messageId,
+              user_id:
+                userId,
+            },
+            {
+              onConflict:
+                'message_id,user_id',
+            }
+          );
 
       if (error) {
         console.error(
@@ -350,102 +571,466 @@ export default function ConversationScreen() {
           error
         );
       }
+    };
 
-      return;
-    }
+  const sendMessage =
+    async () => {
+      const trimmed =
+        message.trim();
 
-    const { error } = await supabase
-      .from('message_reads')
-      .upsert(
-        {
-          message_id: messageId,
-          user_id: currentUserId,
-        },
-        {
-          onConflict:
-            'message_id,user_id',
+      if (
+        !trimmed ||
+        !currentUserId ||
+        !conversationId ||
+        sending
+      ) {
+        return;
+      }
+
+      try {
+        setSending(true);
+
+        const {
+          data,
+          error,
+        } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id:
+              conversationId,
+            sender_id:
+              currentUserId,
+            body: trimmed,
+            parent_message_id:
+              replyingTo?.id ??
+              null,
+          })
+          .select(
+            `
+            id,
+            body,
+            sender_id,
+            created_at,
+            edited_at,
+            parent_message_id
+            `
+          )
+          .single();
+
+        if (
+          error ||
+          !data
+        ) {
+          console.error(
+            'Send error:',
+            error
+          );
+          return;
         }
+
+        setMessages(
+          (current) => {
+            const exists =
+              current.some(
+                (item) =>
+                  item.id ===
+                  data.id
+              );
+
+            if (exists) {
+              return current;
+            }
+
+            return [
+              ...current,
+              data,
+            ];
+          }
+        );
+
+        setMessage('');
+        setReplyingTo(null);
+      } finally {
+        setSending(false);
+      }
+    };
+
+  const copyMessage =
+    async (
+      item: Message
+    ) => {
+      await Clipboard.setStringAsync(
+        item.body
       );
+    };
 
-    if (error) {
-      console.error(
-        'Read receipt error:',
-        error
+  const toggleFavourite =
+    async (
+      item: Message
+    ) => {
+      if (!currentUserId) {
+        return;
+      }
+
+      const isFavourite =
+        favouriteMap[
+          item.id
+        ];
+
+      if (isFavourite) {
+        const { error } =
+          await supabase
+            .from(
+              'favourite_messages'
+            )
+            .delete()
+            .eq(
+              'message_id',
+              item.id
+            )
+            .eq(
+              'user_id',
+              currentUserId
+            );
+
+        if (!error) {
+          setFavouriteMap(
+            (current) => ({
+              ...current,
+              [item.id]:
+                false,
+            })
+          );
+        }
+
+        return;
+      }
+
+      const { error } =
+        await supabase
+          .from(
+            'favourite_messages'
+          )
+          .insert({
+            message_id:
+              item.id,
+            user_id:
+              currentUserId,
+          });
+
+      if (!error) {
+        setFavouriteMap(
+          (current) => ({
+            ...current,
+            [item.id]:
+              true,
+          })
+        );
+      }
+    };
+
+  const addReaction =
+    async (
+      item: Message,
+      emoji: string
+    ) => {
+      if (!currentUserId) {
+        return;
+      }
+
+      const { error } =
+        await supabase
+          .from(
+            'message_reactions'
+          )
+          .upsert(
+            {
+              message_id:
+                item.id,
+              user_id:
+                currentUserId,
+              emoji,
+            },
+            {
+              onConflict:
+                'message_id,user_id,emoji',
+            }
+          );
+
+      if (!error) {
+        await loadReactions(
+          messages
+        );
+      }
+    };
+
+  const showReactionPicker =
+    (
+      item: Message
+    ) => {
+      Alert.alert(
+        'React',
+        'Choose a reaction',
+        [
+          {
+            text: '👍',
+            onPress: () =>
+              addReaction(
+                item,
+                '👍'
+              ),
+          },
+          {
+            text: '❤️',
+            onPress: () =>
+              addReaction(
+                item,
+                '❤️'
+              ),
+          },
+          {
+            text: '😂',
+            onPress: () =>
+              addReaction(
+                item,
+                '😂'
+              ),
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ]
       );
-    }
-  };
+    };
 
-  const sendMessage = async () => {
-    const trimmedMessage =
-      message.trim();
-
-    if (
-      !trimmedMessage ||
-      !currentUserId ||
-      !conversationId ||
-      sending
-    ) {
-      return;
-    }
-
-    try {
-      setSending(true);
-
-      const { data, error } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id:
-            conversationId,
-          sender_id: currentUserId,
-          body: trimmedMessage,
-        })
-        .select(
-          'id, body, sender_id, created_at'
-        )
-        .single();
-
-      if (error || !data) {
-        console.error(
-          'Send message error:',
-          error
+  const editMessage =
+    (
+      item: Message
+    ) => {
+      if (
+        Platform.OS !== 'ios'
+      ) {
+        Alert.alert(
+          'Edit Message',
+          'Inline editing will be added for non-iOS builds later.'
         );
         return;
       }
 
-      setMessages((current) => {
-        const exists = current.some(
-          (item) =>
-            item.id === data.id
+      Alert.prompt(
+        'Edit Message',
+        'Update your message',
+        async (newText) => {
+          const trimmed =
+            newText?.trim();
+
+          if (
+            !trimmed ||
+            trimmed === item.body
+          ) {
+            return;
+          }
+
+          const editedAt =
+            new Date().toISOString();
+
+          const { error } =
+            await supabase
+              .from('messages')
+              .update({
+                body: trimmed,
+                edited_at:
+                  editedAt,
+              })
+              .eq(
+                'id',
+                item.id
+              );
+
+          if (error) {
+            Alert.alert(
+              'Unable to edit message',
+              error.message
+            );
+            return;
+          }
+
+          setMessages(
+            (current) =>
+              current.map(
+                (message) =>
+                  message.id ===
+                  item.id
+                    ? {
+                        ...message,
+                        body: trimmed,
+                        edited_at:
+                          editedAt,
+                      }
+                    : message
+              )
+          );
+        },
+        'plain-text',
+        item.body
+      );
+    };
+
+  const deleteMessage =
+    async (
+      item: Message
+    ) => {
+      const { error } =
+        await supabase
+          .from('messages')
+          .update({
+            deleted_at:
+              new Date()
+                .toISOString(),
+          })
+          .eq(
+            'id',
+            item.id
+          );
+
+      if (!error) {
+        setMessages(
+          (current) =>
+            current.filter(
+              (message) =>
+                message.id !==
+                item.id
+            )
         );
+      }
+    };
 
-        if (exists) {
-          return current;
-        }
+  const confirmDelete =
+    (
+      item: Message
+    ) => {
+      Alert.alert(
+        'Delete Message',
+        'Delete this message?',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+          {
+            text: 'Delete',
+            style:
+              'destructive',
+            onPress: () =>
+              deleteMessage(
+                item
+              ),
+          },
+        ]
+      );
+    };
 
-        return [...current, data];
+  const showMessageActions =
+    (
+      item: Message
+    ) => {
+      const actions: any[] =
+        [
+          {
+            text: 'Copy',
+            onPress: () =>
+              copyMessage(item),
+          },
+          {
+            text: 'Reply',
+            onPress: () =>
+              setReplyingTo(
+                item
+              ),
+          },
+          {
+            text:
+              favouriteMap[
+                item.id
+              ]
+                ? 'Remove Favourite'
+                : 'Favourite',
+            onPress: () =>
+              toggleFavourite(
+                item
+              ),
+          },
+          {
+            text: 'React',
+            onPress: () =>
+              showReactionPicker(
+                item
+              ),
+          },
+        ];
+
+      if (
+        item.sender_id ===
+        currentUserId
+      ) {
+        actions.push({
+          text: 'Edit',
+          onPress: () =>
+            editMessage(item),
+        });
+
+        actions.push({
+          text: 'Delete',
+          style:
+            'destructive',
+          onPress: () =>
+            confirmDelete(item),
+        });
+      }
+
+      actions.push({
+        text: 'Cancel',
+        style: 'cancel',
       });
 
-      setMessage('');
-    } catch (error) {
-      console.error(
-        'Send message error:',
-        error
+      Alert.alert(
+        'Message',
+        item.body,
+        actions
       );
-    } finally {
-      setSending(false);
-    }
-  };
+    };
 
-  const formatTime = (
-    timestamp: string
-  ) => {
-    return new Date(
-      timestamp
-    ).toLocaleTimeString([], {
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  };
+  const findParentMessage =
+    (
+      parentId: string | null
+    ) => {
+      if (!parentId) {
+        return null;
+      }
+
+      return (
+        messages.find(
+          (item) =>
+            item.id ===
+            parentId
+        ) ?? null
+      );
+    };
+
+  const formatTime =
+    (
+      timestamp: string
+    ) =>
+      new Date(
+        timestamp
+      ).toLocaleTimeString(
+        [],
+        {
+          hour: 'numeric',
+          minute: '2-digit',
+        }
+      );
 
   return (
     <SafeAreaView
@@ -459,21 +1044,33 @@ export default function ConversationScreen() {
             : undefined
         }
       >
-        <View style={styles.header}>
+        <View
+          style={styles.header}
+        >
           <Pressable
-            style={styles.backButton}
-            onPress={() => router.back()}
+            style={
+              styles.backButton
+            }
+            onPress={() =>
+              router.back()
+            }
           >
             <Text
-              style={styles.backText}
+              style={
+                styles.backText
+              }
             >
               ‹
             </Text>
           </Pressable>
 
-          <View style={styles.avatar}>
+          <View
+            style={styles.avatar}
+          >
             <Text
-              style={styles.avatarText}
+              style={
+                styles.avatarText
+              }
             >
               {conversationTitle
                 .charAt(0)
@@ -482,13 +1079,21 @@ export default function ConversationScreen() {
           </View>
 
           <View
-            style={styles.headerText}
+            style={
+              styles.headerText
+            }
           >
-            <Text style={styles.name}>
+            <Text
+              style={styles.name}
+            >
               {conversationTitle}
             </Text>
 
-            <Text style={styles.status}>
+            <Text
+              style={
+                styles.status
+              }
+            >
               {otherUser
                 ? `@${otherUser.username}`
                 : 'Live'}
@@ -511,27 +1116,45 @@ export default function ConversationScreen() {
           <FlatList
             ref={listRef}
             data={messages}
-            keyExtractor={(item) =>
-              item.id
+            keyExtractor={
+              (item) =>
+                item.id
             }
             contentContainerStyle={
               styles.messageList
             }
-            onContentSizeChange={() =>
-              listRef.current?.scrollToEnd({
-                animated: false,
-              })
-            }
-            renderItem={({ item }) => {
+            renderItem={({
+              item,
+            }) => {
               const sentByMe =
                 item.sender_id ===
                 currentUserId;
 
               const isRead =
-                readMap[item.id] === true;
+                readMap[
+                  item.id
+                ];
+
+              const parent =
+                findParentMessage(
+                  item.parent_message_id
+                );
+
+              const reactions =
+                reactionMap[
+                  item.id
+                ] ?? [];
 
               return (
-                <View
+                <Pressable
+                  onLongPress={() =>
+                    showMessageActions(
+                      item
+                    )
+                  }
+                  delayLongPress={
+                    350
+                  }
                   style={
                     sentByMe
                       ? styles.sentRow
@@ -545,6 +1168,25 @@ export default function ConversationScreen() {
                         styles.messageGroupSent,
                     ]}
                   >
+                    {parent && (
+                      <View
+                        style={
+                          styles.replyPreview
+                        }
+                      >
+                        <Text
+                          style={
+                            styles.replyPreviewText
+                          }
+                          numberOfLines={
+                            1
+                          }
+                        >
+                          {parent.body}
+                        </Text>
+                      </View>
+                    )}
+
                     <View
                       style={
                         sentByMe
@@ -563,32 +1205,139 @@ export default function ConversationScreen() {
                       </Text>
                     </View>
 
-                    <Text
+                    {reactions.length >
+                      0 && (
+                      <View
+                        style={
+                          styles.reactionRow
+                        }
+                      >
+                        {reactions.map(
+                          (
+                            emoji,
+                            index
+                          ) => (
+                            <Text
+                              key={`${emoji}-${index}`}
+                              style={
+                                styles.reaction
+                              }
+                            >
+                              {emoji}
+                            </Text>
+                          )
+                        )}
+                      </View>
+                    )}
+
+                    <View
                       style={
-                        styles.timestamp
+                        styles.metaRow
                       }
                     >
-                      {sentByMe
-                        ? isRead
-                          ? 'Read '
-                          : 'Sent '
-                        : ''}
-                      {formatTime(
-                        item.created_at
+                      {favouriteMap[
+                        item.id
+                      ] && (
+                        <Text
+                          style={
+                            styles.star
+                          }
+                        >
+                          ★
+                        </Text>
                       )}
-                    </Text>
+
+                      <Text
+                        style={
+                          styles.timestamp
+                        }
+                      >
+                        {sentByMe
+                          ? isRead
+                            ? 'Read '
+                            : 'Sent '
+                          : ''}
+                        {formatTime(
+                          item.created_at
+                        )}
+                        {item.edited_at
+                          ? ' · Edited'
+                          : ''}
+                      </Text>
+                    </View>
                   </View>
-                </View>
+                </Pressable>
               );
             }}
           />
         )}
 
-        <View style={styles.composer}>
+        {replyingTo && (
+          <View
+            style={
+              styles.replyingBar
+            }
+          >
+            <View
+              style={
+                styles.replyingTextContainer
+              }
+            >
+              <Text
+                style={
+                  styles.replyingLabel
+                }
+              >
+                Replying to
+              </Text>
+
+              <Text
+                numberOfLines={
+                  1
+                }
+                style={
+                  styles.replyingText
+                }
+              >
+                {
+                  replyingTo.body
+                }
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={() =>
+                setReplyingTo(
+                  null
+                )
+              }
+            >
+              <Text
+                style={
+                  styles.closeReply
+                }
+              >
+                ×
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        <View
+          style={
+            styles.composer
+          }
+        >
           <TextInput
             value={message}
-            onChangeText={setMessage}
-            placeholder="Message"
+            onChangeText={
+              setMessage
+            }
+            placeholder={
+              replyingTo
+                ? 'Write a reply'
+                : 'Message'
+            }
             placeholderTextColor="#98A2B3"
             style={styles.input}
             multiline
@@ -605,10 +1354,18 @@ export default function ConversationScreen() {
                 sending) &&
                 styles.sendButtonDisabled,
             ]}
-            onPress={sendMessage}
+            onPress={
+              sendMessage
+            }
           >
-            <Text style={styles.sendText}>
-              {sending ? '…' : '↑'}
+            <Text
+              style={
+                styles.sendText
+              }
+            >
+              {sending
+                ? '…'
+                : '↑'}
             </Text>
           </Pressable>
         </View>
@@ -617,177 +1374,269 @@ export default function ConversationScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F7F8FA',
-  },
+const styles =
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor:
+        '#F7F8FA',
+    },
 
-  screen: {
-    flex: 1,
-  },
+    screen: {
+      flex: 1,
+    },
 
-  header: {
-    height: 72,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#EAECF0',
-    backgroundColor: '#FFFFFF',
-  },
+    header: {
+      height: 72,
+      paddingHorizontal: 18,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderBottomWidth: 1,
+      borderBottomColor:
+        '#EAECF0',
+      backgroundColor:
+        '#FFFFFF',
+    },
 
-  backButton: {
-    width: 34,
-    marginRight: 6,
-  },
+    backButton: {
+      width: 34,
+      marginRight: 6,
+    },
 
-  backText: {
-    fontSize: 38,
-    lineHeight: 40,
-    color: '#4169E1',
-  },
+    backText: {
+      fontSize: 38,
+      lineHeight: 40,
+      color: '#4169E1',
+    },
 
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#E8ECFB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
+    avatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor:
+        '#E8ECFB',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginRight: 12,
+    },
 
-  avatarText: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#4169E1',
-  },
+    avatarText: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: '#4169E1',
+    },
 
-  headerText: {
-    flex: 1,
-  },
+    headerText: {
+      flex: 1,
+    },
 
-  name: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#101828',
-  },
+    name: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: '#101828',
+    },
 
-  status: {
-    fontSize: 12,
-    color: '#667085',
-    marginTop: 2,
-  },
+    status: {
+      fontSize: 12,
+      color: '#667085',
+      marginTop: 2,
+    },
 
-  loaderContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+    loaderContainer: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent:
+        'center',
+    },
 
-  messageList: {
-    paddingHorizontal: 18,
-    paddingVertical: 24,
-  },
+    messageList: {
+      paddingHorizontal: 18,
+      paddingVertical: 24,
+    },
 
-  receivedRow: {
-    alignItems: 'flex-start',
-    marginBottom: 14,
-  },
+    receivedRow: {
+      alignItems:
+        'flex-start',
+      marginBottom: 14,
+    },
 
-  sentRow: {
-    alignItems: 'flex-end',
-    marginBottom: 14,
-  },
+    sentRow: {
+      alignItems:
+        'flex-end',
+      marginBottom: 14,
+    },
 
-  messageGroup: {
-    maxWidth: '78%',
-    alignItems: 'flex-start',
-  },
+    messageGroup: {
+      maxWidth: '78%',
+      alignItems:
+        'flex-start',
+    },
 
-  messageGroupSent: {
-    alignItems: 'flex-end',
-  },
+    messageGroupSent: {
+      alignItems:
+        'flex-end',
+    },
 
-  receivedBubble: {
-    backgroundColor: '#EAECF0',
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 18,
-    borderBottomLeftRadius: 5,
-  },
+    replyPreview: {
+      maxWidth: '100%',
+      backgroundColor:
+        '#F2F4F7',
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 9,
+      marginBottom: 4,
+    },
 
-  sentBubble: {
-    backgroundColor: '#4169E1',
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 18,
-    borderBottomRightRadius: 5,
-  },
+    replyPreviewText: {
+      fontSize: 12,
+      color: '#667085',
+    },
 
-  receivedText: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: '#101828',
-  },
+    receivedBubble: {
+      backgroundColor:
+        '#EAECF0',
+      paddingHorizontal: 16,
+      paddingVertical: 11,
+      borderRadius: 18,
+      borderBottomLeftRadius:
+        5,
+    },
 
-  sentText: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: '#FFFFFF',
-  },
+    sentBubble: {
+      backgroundColor:
+        '#4169E1',
+      paddingHorizontal: 16,
+      paddingVertical: 11,
+      borderRadius: 18,
+      borderBottomRightRadius:
+        5,
+    },
 
-  timestamp: {
-    fontSize: 11,
-    color: '#98A2B3',
-    marginTop: 5,
-    paddingHorizontal: 4,
-  },
+    receivedText: {
+      fontSize: 16,
+      lineHeight: 22,
+      color: '#101828',
+    },
 
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#EAECF0',
-    backgroundColor: '#FFFFFF',
-  },
+    sentText: {
+      fontSize: 16,
+      lineHeight: 22,
+      color: '#FFFFFF',
+    },
 
-  input: {
-    flex: 1,
-    minHeight: 44,
-    maxHeight: 110,
-    borderWidth: 1,
-    borderColor: '#D0D5DD',
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingTop: 11,
-    paddingBottom: 10,
-    fontSize: 16,
-    color: '#101828',
-    backgroundColor: '#F9FAFB',
-  },
+    reactionRow: {
+      flexDirection: 'row',
+      marginTop: 5,
+    },
 
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    marginLeft: 9,
-    backgroundColor: '#4169E1',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+    reaction: {
+      fontSize: 17,
+      marginRight: 4,
+    },
 
-  sendButtonDisabled: {
-    opacity: 0.35,
-  },
+    metaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 5,
+    },
 
-  sendText: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-});
+    star: {
+      fontSize: 12,
+      color: '#F79009',
+      marginRight: 4,
+    },
+
+    timestamp: {
+      fontSize: 11,
+      color: '#98A2B3',
+      paddingHorizontal: 4,
+    },
+
+    replyingBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      backgroundColor:
+        '#F2F4F7',
+      borderTopWidth: 1,
+      borderTopColor:
+        '#EAECF0',
+    },
+
+    replyingTextContainer: {
+      flex: 1,
+    },
+
+    replyingLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: '#4169E1',
+    },
+
+    replyingText: {
+      marginTop: 2,
+      fontSize: 13,
+      color: '#667085',
+    },
+
+    closeReply: {
+      fontSize: 28,
+      color: '#667085',
+      paddingLeft: 12,
+    },
+
+    composer: {
+      flexDirection: 'row',
+      alignItems:
+        'flex-end',
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: 12,
+      borderTopWidth: 1,
+      borderTopColor:
+        '#EAECF0',
+      backgroundColor:
+        '#FFFFFF',
+    },
+
+    input: {
+      flex: 1,
+      minHeight: 44,
+      maxHeight: 110,
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      borderRadius: 22,
+      paddingHorizontal: 16,
+      paddingTop: 11,
+      paddingBottom: 10,
+      fontSize: 16,
+      color: '#101828',
+      backgroundColor:
+        '#F9FAFB',
+    },
+
+    sendButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      marginLeft: 9,
+      backgroundColor:
+        '#4169E1',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+    },
+
+    sendButtonDisabled: {
+      opacity: 0.35,
+    },
+
+    sendText: {
+      color: '#FFFFFF',
+      fontSize: 24,
+      fontWeight: '700',
+    },
+  });
