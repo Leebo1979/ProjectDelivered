@@ -253,6 +253,151 @@ function VideoMessagePlayer({
   );
 }
 
+
+function PendingVoicePreview({
+  uri,
+  durationMillis,
+  onRemove,
+}: {
+  uri: string;
+  durationMillis: number | null;
+  onRemove: () => void;
+}) {
+  const player =
+    useAudioPlayer(uri, {
+      updateInterval: 200,
+    });
+
+  const status =
+    useAudioPlayerStatus(
+      player
+    );
+
+  const togglePlayback =
+    async () => {
+      if (status.playing) {
+        player.pause();
+        return;
+      }
+
+      if (
+        status.duration > 0 &&
+        status.currentTime >=
+          status.duration - 0.15
+      ) {
+        await player.seekTo(0);
+      }
+
+      player.play();
+    };
+
+  const displaySeconds =
+    status.playing
+      ? status.currentTime
+      : status.duration ||
+        (
+          durationMillis
+            ? durationMillis / 1000
+            : 0
+        );
+
+  return (
+    <View
+      style={
+        styles.pendingVoiceCard
+      }
+    >
+      <Pressable
+        style={
+          styles.pendingVoicePlayButton
+        }
+        onPress={
+          togglePlayback
+        }
+      >
+        <Text
+          style={
+            styles.pendingVoicePlayText
+          }
+        >
+          {status.playing
+            ? 'Ⅱ'
+            : '▶'}
+        </Text>
+      </Pressable>
+
+      <View
+        style={
+          styles.pendingVoiceContent
+        }
+      >
+        <Text
+          style={
+            styles.pendingVoiceTitle
+          }
+        >
+          Voice message ready
+        </Text>
+
+        <View
+          style={
+            styles.pendingVoiceWave
+          }
+        >
+          {[
+            8, 14, 20, 12, 18, 24,
+            10, 16, 22, 14, 18, 10,
+          ].map(
+            (
+              height,
+              index
+            ) => (
+              <View
+                key={
+                  index
+                }
+                style={[
+                  styles.pendingVoiceWaveBar,
+                  {
+                    height,
+                  },
+                ]}
+              />
+            )
+          )}
+        </View>
+
+        <Text
+          style={
+            styles.pendingVoiceDuration
+          }
+        >
+          {formatAudioTime(
+            displaySeconds
+          )}
+        </Text>
+      </View>
+
+      <Pressable
+        style={
+          styles.pendingVoiceRemoveButton
+        }
+        onPress={
+          onRemove
+        }
+      >
+        <Text
+          style={
+            styles.pendingVoiceRemoveText
+          }
+        >
+          ×
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function ConversationScreen() {
   const { conversationId } =
     useLocalSearchParams<{
@@ -3217,7 +3362,7 @@ export default function ConversationScreen() {
                   styles.recordingLabel
                 }
               >
-                Recording voice message
+                Recording…
               </Text>
 
               <Text
@@ -3268,7 +3413,28 @@ export default function ConversationScreen() {
           </View>
         )}
 
-        {pendingAttachment && (
+        {pendingAttachment &&
+        pendingAttachment.mimeType.startsWith(
+          'audio/'
+        ) ? (
+          <PendingVoicePreview
+            uri={
+              pendingAttachment.uri
+            }
+            durationMillis={
+              pendingVoiceDurationMillis
+            }
+            onRemove={() => {
+              setPendingAttachment(
+                null
+              );
+
+              setPendingVoiceDurationMillis(
+                null
+              );
+            }}
+          />
+        ) : pendingAttachment ? (
           <View
             style={
               styles.pendingAttachment
@@ -3284,11 +3450,7 @@ export default function ConversationScreen() {
                   styles.pendingAttachmentLabel
                 }
               >
-                {pendingAttachment.mimeType.startsWith(
-                  'audio/'
-                )
-                  ? 'Voice message'
-                  : 'Attachment'}
+                Attachment
               </Text>
 
               <Text
@@ -3299,16 +3461,9 @@ export default function ConversationScreen() {
                   1
                 }
               >
-                {pendingAttachment.mimeType.startsWith(
-                  'audio/'
-                ) &&
-                pendingVoiceDurationMillis !==
-                  null
-                  ? formatAudioTime(
-                      pendingVoiceDurationMillis /
-                        1000
-                    )
-                  : pendingAttachment.name}
+                {
+                  pendingAttachment.name
+                }
               </Text>
             </View>
 
@@ -3332,7 +3487,7 @@ export default function ConversationScreen() {
               </Text>
             </Pressable>
           </View>
-        )}
+        ) : null}
 
         {typingText ? (
           <View
@@ -3929,6 +4084,83 @@ const styles =
       paddingLeft: 12,
     },
 
+    pendingVoiceCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor:
+        '#EEF2FF',
+      borderTopWidth: 1,
+      borderTopColor:
+        '#D9E0FF',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+
+    pendingVoicePlayButton: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor:
+        '#4169E1',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginRight: 11,
+    },
+
+    pendingVoicePlayText: {
+      color: '#FFFFFF',
+      fontSize: 14,
+      fontWeight: '800',
+    },
+
+    pendingVoiceContent: {
+      flex: 1,
+    },
+
+    pendingVoiceTitle: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: '#344054',
+    },
+
+    pendingVoiceWave: {
+      height: 26,
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 4,
+    },
+
+    pendingVoiceWaveBar: {
+      width: 3,
+      borderRadius: 2,
+      backgroundColor:
+        '#7F98EC',
+      marginRight: 3,
+    },
+
+    pendingVoiceDuration: {
+      marginTop: 2,
+      fontSize: 11,
+      color: '#667085',
+    },
+
+    pendingVoiceRemoveButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginLeft: 8,
+    },
+
+    pendingVoiceRemoveText: {
+      fontSize: 26,
+      lineHeight: 28,
+      color: '#667085',
+    },
+
     pendingAttachment: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -4018,7 +4250,7 @@ const styles =
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 14,
-      paddingVertical: 10,
+      paddingVertical: 12,
       backgroundColor:
         '#FFF4ED',
       borderTopWidth: 1,
