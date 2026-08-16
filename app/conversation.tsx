@@ -1,11 +1,23 @@
 import * as Clipboard from 'expo-clipboard';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import {
+  router,
+  useLocalSearchParams,
+} from 'expo-router';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -24,6 +36,10 @@ type Message = {
   created_at: string;
   edited_at: string | null;
   parent_message_id: string | null;
+  attachment_path: string | null;
+  attachment_name: string | null;
+  attachment_type: string | null;
+  attachment_size: number | null;
 };
 
 type OtherUser = {
@@ -37,21 +53,41 @@ type Reaction = {
   user_id: string;
 };
 
+type PendingAttachment = {
+  uri: string;
+  name: string;
+  mimeType: string;
+  size: number | null;
+  isImage: boolean;
+};
+
 type ReadMap = Record<string, boolean>;
 type FavouriteMap = Record<string, boolean>;
 type ReactionMap = Record<string, string[]>;
 type SenderNameMap = Record<string, string>;
 type TypingUserMap = Record<string, string>;
+type AttachmentUrlMap = Record<string, string>;
 
 export default function ConversationScreen() {
-  const { conversationId } = useLocalSearchParams<{
-    conversationId: string;
-  }>();
+  const { conversationId } =
+    useLocalSearchParams<{
+      conversationId: string;
+    }>();
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
+  const [messages, setMessages] =
+    useState<Message[]>([]);
+
+  const [message, setMessage] =
+    useState('');
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [sending, setSending] =
+    useState(false);
+
+  const [uploading, setUploading] =
+    useState(false);
 
   const [currentUserId, setCurrentUserId] =
     useState<string | null>(null);
@@ -83,35 +119,55 @@ export default function ConversationScreen() {
   const [typingUsers, setTypingUsers] =
     useState<TypingUserMap>({});
 
+  const [attachmentUrlMap, setAttachmentUrlMap] =
+    useState<AttachmentUrlMap>({});
+
   const [replyingTo, setReplyingTo] =
     useState<Message | null>(null);
+
+  const [pendingAttachment, setPendingAttachment] =
+    useState<PendingAttachment | null>(null);
 
   const listRef =
     useRef<FlatList<Message>>(null);
 
   const typingChannelRef =
-    useRef<ReturnType<typeof supabase.channel> | null>(null);
+    useRef<ReturnType<typeof supabase.channel> | null>(
+      null
+    );
 
   const typingTimeoutRef =
-    useRef<ReturnType<typeof setTimeout> | null>(null);
+    useRef<ReturnType<typeof setTimeout> | null>(
+      null
+    );
 
-  const typingText = useMemo(() => {
-    const names = Object.values(typingUsers);
+  const typingText =
+    useMemo(() => {
+      const names =
+        Object.values(
+          typingUsers
+        );
 
-    if (names.length === 0) {
-      return '';
-    }
+      if (
+        names.length === 0
+      ) {
+        return '';
+      }
 
-    if (names.length === 1) {
-      return `${names[0]} is typing…`;
-    }
+      if (
+        names.length === 1
+      ) {
+        return `${names[0]} is typing…`;
+      }
 
-    if (names.length === 2) {
-      return `${names[0]} and ${names[1]} are typing…`;
-    }
+      if (
+        names.length === 2
+      ) {
+        return `${names[0]} and ${names[1]} are typing…`;
+      }
 
-    return `${names.length} people are typing…`;
-  }, [typingUsers]);
+      return `${names.length} people are typing…`;
+    }, [typingUsers]);
 
   useEffect(() => {
     if (!conversationId) {
@@ -129,167 +185,207 @@ export default function ConversationScreen() {
       return;
     }
 
-    const messageChannel = supabase
-      .channel(`messages:${conversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        async (payload) => {
-          const newMessage =
-            payload.new as Message;
+    const messageChannel =
+      supabase
+        .channel(
+          `messages:${conversationId}`
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+            filter:
+              `conversation_id=eq.${conversationId}`,
+          },
+          async (payload) => {
+            const newMessage =
+              payload.new as Message;
 
-          setMessages((current) => {
-            const exists =
-              current.some(
-                (item) =>
-                  item.id === newMessage.id
-              );
+            setMessages(
+              (current) => {
+                const exists =
+                  current.some(
+                    (item) =>
+                      item.id ===
+                      newMessage.id
+                  );
 
-            if (exists) {
-              return current;
-            }
+                if (exists) {
+                  return current;
+                }
 
-            return [
-              ...current,
-              newMessage,
-            ];
-          });
-
-          if (isGroup) {
-            await ensureSenderName(
-              newMessage.sender_id
+                return [
+                  ...current,
+                  newMessage,
+                ];
+              }
             );
-          }
-
-          if (
-            newMessage.sender_id !==
-            currentUserId
-          ) {
-            await markMessageRead(
-              newMessage.id,
-              currentUserId
-            );
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const updated =
-            payload.new as Message & {
-              deleted_at?: string | null;
-            };
-
-          if (updated.deleted_at) {
-            setMessages((current) =>
-              current.filter(
-                (item) =>
-                  item.id !== updated.id
-              )
-            );
-
-            return;
-          }
-
-          setMessages((current) =>
-            current.map((item) =>
-              item.id === updated.id
-                ? {
-                    ...item,
-                    body: updated.body,
-                    edited_at: updated.edited_at,
-                  }
-                : item
-            )
-          );
-        }
-      )
-      .subscribe();
-
-    const readChannel = supabase
-      .channel(`reads:${conversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'message_reads',
-        },
-        (payload) => {
-          const read =
-            payload.new as {
-              message_id: string;
-              user_id: string;
-            };
-
-          if (
-            read.user_id !== currentUserId
-          ) {
-            setReadMap((current) => ({
-              ...current,
-              [read.message_id]: true,
-            }));
-          }
-        }
-      )
-      .subscribe();
-
-    const typingChannel = supabase
-      .channel(`typing:${conversationId}`)
-      .on(
-        'broadcast',
-        {
-          event: 'typing',
-        },
-        ({ payload }) => {
-          const typingPayload =
-            payload as {
-              userId: string;
-              displayName: string;
-              isTyping: boolean;
-            };
-
-          if (
-            typingPayload.userId ===
-            currentUserId
-          ) {
-            return;
-          }
-
-          setTypingUsers((current) => {
-            const next = {
-              ...current,
-            };
 
             if (
-              typingPayload.isTyping
+              newMessage.attachment_path
             ) {
-              next[
-                typingPayload.userId
-              ] =
-                typingPayload.displayName;
-            } else {
-              delete next[
-                typingPayload.userId
-              ];
+              await loadAttachmentUrl(
+                newMessage
+              );
             }
 
-            return next;
-          });
-        }
-      )
-      .subscribe();
+            if (isGroup) {
+              await ensureSenderName(
+                newMessage.sender_id
+              );
+            }
+
+            if (
+              newMessage.sender_id !==
+              currentUserId
+            ) {
+              await markMessageRead(
+                newMessage.id,
+                currentUserId
+              );
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'messages',
+            filter:
+              `conversation_id=eq.${conversationId}`,
+          },
+          (payload) => {
+            const updated =
+              payload.new as Message & {
+                deleted_at?: string | null;
+              };
+
+            if (
+              updated.deleted_at
+            ) {
+              setMessages(
+                (current) =>
+                  current.filter(
+                    (item) =>
+                      item.id !==
+                      updated.id
+                  )
+              );
+
+              return;
+            }
+
+            setMessages(
+              (current) =>
+                current.map(
+                  (item) =>
+                    item.id ===
+                    updated.id
+                      ? {
+                          ...item,
+                          ...updated,
+                        }
+                      : item
+                )
+            );
+          }
+        )
+        .subscribe();
+
+    const readChannel =
+      supabase
+        .channel(
+          `reads:${conversationId}`
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table:
+              'message_reads',
+          },
+          (payload) => {
+            const read =
+              payload.new as {
+                message_id:
+                  string;
+                user_id:
+                  string;
+              };
+
+            if (
+              read.user_id !==
+              currentUserId
+            ) {
+              setReadMap(
+                (current) => ({
+                  ...current,
+                  [read.message_id]:
+                    true,
+                })
+              );
+            }
+          }
+        )
+        .subscribe();
+
+    const typingChannel =
+      supabase
+        .channel(
+          `typing:${conversationId}`
+        )
+        .on(
+          'broadcast',
+          {
+            event: 'typing',
+          },
+          ({ payload }) => {
+            const typingPayload =
+              payload as {
+                userId:
+                  string;
+                displayName:
+                  string;
+                isTyping:
+                  boolean;
+              };
+
+            if (
+              typingPayload.userId ===
+              currentUserId
+            ) {
+              return;
+            }
+
+            setTypingUsers(
+              (current) => {
+                const next = {
+                  ...current,
+                };
+
+                if (
+                  typingPayload.isTyping
+                ) {
+                  next[
+                    typingPayload.userId
+                  ] =
+                    typingPayload.displayName;
+                } else {
+                  delete next[
+                    typingPayload.userId
+                  ];
+                }
+
+                return next;
+              }
+            );
+          }
+        )
+        .subscribe();
 
     typingChannelRef.current =
       typingChannel;
@@ -302,19 +398,6 @@ export default function ConversationScreen() {
           typingTimeoutRef.current
         );
       }
-
-      typingChannelRef.current
-        ?.send({
-          type: 'broadcast',
-          event: 'typing',
-          payload: {
-            userId: currentUserId,
-            displayName:
-              currentDisplayName,
-            isTyping: false,
-          },
-        })
-        .catch(() => {});
 
       typingChannelRef.current =
         null;
@@ -451,7 +534,8 @@ export default function ConversationScreen() {
 
   const loadSenderNames =
     async (
-      loadedMessages: Message[]
+      loadedMessages:
+        Message[]
     ) => {
       const uniqueSenderIds =
         [
@@ -506,6 +590,70 @@ export default function ConversationScreen() {
 
       setSenderNameMap(
         nextMap
+      );
+    };
+
+  const loadAttachmentUrl =
+    async (
+      item: Message
+    ) => {
+      if (
+        !item.attachment_path
+      ) {
+        return;
+      }
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .storage
+        .from(
+          'message-attachments'
+        )
+        .createSignedUrl(
+          item.attachment_path,
+          60 * 60
+        );
+
+      if (
+        error ||
+        !data
+      ) {
+        console.error(
+          'Attachment signed URL error:',
+          error
+        );
+        return;
+      }
+
+      setAttachmentUrlMap(
+        (current) => ({
+          ...current,
+          [item.id]:
+            data.signedUrl,
+        })
+      );
+    };
+
+  const loadAttachmentUrls =
+    async (
+      loadedMessages:
+        Message[]
+    ) => {
+      const attachmentMessages =
+        loadedMessages.filter(
+          (item) =>
+            !!item.attachment_path
+        );
+
+      await Promise.all(
+        attachmentMessages.map(
+          (item) =>
+            loadAttachmentUrl(
+              item
+            )
+        )
       );
     };
 
@@ -607,7 +755,9 @@ export default function ConversationScreen() {
                 conversationId
               );
 
-            if (!membersError) {
+            if (
+              !membersError
+            ) {
               const otherMember =
                 members?.find(
                   (member) =>
@@ -660,7 +810,11 @@ export default function ConversationScreen() {
             sender_id,
             created_at,
             edited_at,
-            parent_message_id
+            parent_message_id,
+            attachment_path,
+            attachment_name,
+            attachment_type,
+            attachment_size
             `
           )
           .eq(
@@ -690,6 +844,10 @@ export default function ConversationScreen() {
           data ?? [];
 
         setMessages(
+          loadedMessages
+        );
+
+        await loadAttachmentUrls(
           loadedMessages
         );
 
@@ -741,7 +899,8 @@ export default function ConversationScreen() {
 
   const loadReadReceipts =
     async (
-      loadedMessages: Message[],
+      loadedMessages:
+        Message[],
       userId: string
     ) => {
       const sentIds =
@@ -792,12 +951,15 @@ export default function ConversationScreen() {
         ] = true;
       }
 
-      setReadMap(nextMap);
+      setReadMap(
+        nextMap
+      );
     };
 
   const loadFavourites =
     async (
-      loadedMessages: Message[],
+      loadedMessages:
+        Message[],
       userId: string
     ) => {
       const ids =
@@ -847,7 +1009,8 @@ export default function ConversationScreen() {
 
   const loadReactions =
     async (
-      loadedMessages: Message[]
+      loadedMessages:
+        Message[]
     ) => {
       const ids =
         loadedMessages.map(
@@ -908,7 +1071,8 @@ export default function ConversationScreen() {
   const markMessageRead =
     async (
       messageId: string,
-      explicitUserId?: string
+      explicitUserId?:
+        string
     ) => {
       let userId =
         explicitUserId ??
@@ -955,16 +1119,220 @@ export default function ConversationScreen() {
       }
     };
 
+  const createStoragePath =
+    (
+      name: string
+    ) => {
+      const safeName =
+        name.replace(
+          /[^a-zA-Z0-9._-]/g,
+          '_'
+        );
+
+      return `${conversationId}/${currentUserId}/${Date.now()}-${safeName}`;
+    };
+
+  const choosePhoto =
+    async () => {
+      try {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+        if (
+          permission.status !==
+          'granted'
+        ) {
+          Alert.alert(
+            'Photo access required',
+            'Please allow photo library access to attach a photo.'
+          );
+          return;
+        }
+
+        const result =
+          await ImagePicker.launchImageLibraryAsync({
+            mediaTypes:
+              ImagePicker.MediaTypeOptions.Images,
+            allowsEditing:
+              false,
+            quality: 0.9,
+          });
+
+        if (
+          result.canceled
+        ) {
+          return;
+        }
+
+        const asset =
+          result.assets[0];
+
+        const name =
+          asset.fileName ??
+          `photo-${Date.now()}.jpg`;
+
+        setPendingAttachment({
+          uri:
+            asset.uri,
+          name,
+          mimeType:
+            asset.mimeType ??
+            'image/jpeg',
+          size:
+            asset.fileSize ??
+            null,
+          isImage: true,
+        });
+      } catch (error) {
+        console.error(
+          'Photo picker error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to select photo',
+          'Please try again.'
+        );
+      }
+    };
+
+  const chooseFile =
+    async () => {
+      try {
+        const result =
+          await DocumentPicker.getDocumentAsync({
+            copyToCacheDirectory:
+              true,
+            multiple: false,
+          });
+
+        if (
+          result.canceled
+        ) {
+          return;
+        }
+
+        const asset =
+          result.assets[0];
+
+        setPendingAttachment({
+          uri:
+            asset.uri,
+          name:
+            asset.name,
+          mimeType:
+            asset.mimeType ??
+            'application/octet-stream',
+          size:
+            asset.size ??
+            null,
+          isImage:
+            asset.mimeType?.startsWith(
+              'image/'
+            ) ?? false,
+        });
+      } catch (error) {
+        console.error(
+          'File picker error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to select file',
+          'Please try again.'
+        );
+      }
+    };
+
+  const showAttachmentMenu =
+    () => {
+      Alert.alert(
+        'Attach',
+        'Choose what to send',
+        [
+          {
+            text:
+              'Photo',
+            onPress:
+              choosePhoto,
+          },
+          {
+            text:
+              'File',
+            onPress:
+              chooseFile,
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
+
+  const uploadAttachment =
+    async (
+      attachment:
+        PendingAttachment
+    ) => {
+      if (
+        !currentUserId ||
+        !conversationId
+      ) {
+        return null;
+      }
+
+      const path =
+        createStoragePath(
+          attachment.name
+        );
+
+      const response =
+        await fetch(
+          attachment.uri
+        );
+
+      const arrayBuffer =
+        await response.arrayBuffer();
+
+      const {
+        error,
+      } = await supabase
+        .storage
+        .from(
+          'message-attachments'
+        )
+        .upload(
+          path,
+          arrayBuffer,
+          {
+            contentType:
+              attachment.mimeType,
+            upsert: false,
+          }
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      return path;
+    };
+
   const sendMessage =
     async () => {
       const trimmed =
         message.trim();
 
       if (
-        !trimmed ||
+        (!trimmed &&
+          !pendingAttachment) ||
         !currentUserId ||
         !conversationId ||
-        sending
+        sending ||
+        uploading
       ) {
         return;
       }
@@ -984,6 +1352,27 @@ export default function ConversationScreen() {
           false
         );
 
+        let attachmentPath:
+          string | null =
+          null;
+
+        if (
+          pendingAttachment
+        ) {
+          setUploading(true);
+
+          attachmentPath =
+            await uploadAttachment(
+              pendingAttachment
+            );
+        }
+
+        const body =
+          trimmed ||
+          (pendingAttachment
+            ? `Attachment: ${pendingAttachment.name}`
+            : '');
+
         const {
           data,
           error,
@@ -994,9 +1383,20 @@ export default function ConversationScreen() {
               conversationId,
             sender_id:
               currentUserId,
-            body: trimmed,
+            body,
             parent_message_id:
               replyingTo?.id ??
+              null,
+            attachment_path:
+              attachmentPath,
+            attachment_name:
+              pendingAttachment?.name ??
+              null,
+            attachment_type:
+              pendingAttachment?.mimeType ??
+              null,
+            attachment_size:
+              pendingAttachment?.size ??
               null,
           })
           .select(
@@ -1006,7 +1406,11 @@ export default function ConversationScreen() {
             sender_id,
             created_at,
             edited_at,
-            parent_message_id
+            parent_message_id,
+            attachment_path,
+            attachment_name,
+            attachment_type,
+            attachment_size
             `
           )
           .single();
@@ -1019,6 +1423,13 @@ export default function ConversationScreen() {
             'Send error:',
             error
           );
+
+          Alert.alert(
+            'Unable to send',
+            error?.message ??
+              'Please try again.'
+          );
+
           return;
         }
 
@@ -1042,9 +1453,32 @@ export default function ConversationScreen() {
           }
         );
 
+        if (
+          data.attachment_path
+        ) {
+          await loadAttachmentUrl(
+            data
+          );
+        }
+
         setMessage('');
         setReplyingTo(null);
+        setPendingAttachment(
+          null
+        );
+      } catch (error: any) {
+        console.error(
+          'Attachment send error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to send attachment',
+          error?.message ??
+            'Please try again.'
+        );
       } finally {
+        setUploading(false);
         setSending(false);
       }
     };
@@ -1062,7 +1496,9 @@ export default function ConversationScreen() {
     async (
       item: Message
     ) => {
-      if (!currentUserId) {
+      if (
+        !currentUserId
+      ) {
         return;
       }
 
@@ -1130,7 +1566,9 @@ export default function ConversationScreen() {
       item: Message,
       emoji: string
     ) => {
-      if (!currentUserId) {
+      if (
+        !currentUserId
+      ) {
         return;
       }
 
@@ -1194,8 +1632,10 @@ export default function ConversationScreen() {
               ),
           },
           {
-            text: 'Cancel',
-            style: 'cancel',
+            text:
+              'Cancel',
+            style:
+              'cancel',
           },
         ]
       );
@@ -1219,7 +1659,9 @@ export default function ConversationScreen() {
       Alert.prompt(
         'Edit Message',
         'Update your message',
-        async (newText) => {
+        async (
+          newText
+        ) => {
           const trimmed =
             newText?.trim();
 
@@ -1240,7 +1682,8 @@ export default function ConversationScreen() {
           } = await supabase
             .from('messages')
             .update({
-              body: trimmed,
+              body:
+                trimmed,
               edited_at:
                 editedAt,
             })
@@ -1318,11 +1761,14 @@ export default function ConversationScreen() {
         'Delete this message?',
         [
           {
-            text: 'Cancel',
-            style: 'cancel',
+            text:
+              'Cancel',
+            style:
+              'cancel',
           },
           {
-            text: 'Delete',
+            text:
+              'Delete',
             style:
               'destructive',
             onPress: () =>
@@ -1341,12 +1787,16 @@ export default function ConversationScreen() {
       const actions:
         any[] = [
         {
-          text: 'Copy',
+          text:
+            'Copy',
           onPress: () =>
-            copyMessage(item),
+            copyMessage(
+              item
+            ),
         },
         {
-          text: 'Reply',
+          text:
+            'Reply',
           onPress: () =>
             setReplyingTo(
               item
@@ -1365,7 +1815,8 @@ export default function ConversationScreen() {
             ),
         },
         {
-          text: 'React',
+          text:
+            'React',
           onPress: () =>
             showReactionPicker(
               item
@@ -1378,13 +1829,17 @@ export default function ConversationScreen() {
         currentUserId
       ) {
         actions.push({
-          text: 'Edit',
+          text:
+            'Edit',
           onPress: () =>
-            editMessage(item),
+            editMessage(
+              item
+            ),
         });
 
         actions.push({
-          text: 'Delete',
+          text:
+            'Delete',
           style:
             'destructive',
           onPress: () =>
@@ -1395,8 +1850,10 @@ export default function ConversationScreen() {
       }
 
       actions.push({
-        text: 'Cancel',
-        style: 'cancel',
+        text:
+          'Cancel',
+        style:
+          'cancel',
       });
 
       Alert.alert(
@@ -1442,6 +1899,106 @@ export default function ConversationScreen() {
       });
     };
 
+  const openAttachment =
+    async (
+      item: Message
+    ) => {
+      if (
+        !item.attachment_path
+      ) {
+        return;
+      }
+
+      let url =
+        attachmentUrlMap[
+          item.id
+        ];
+
+      if (!url) {
+        const {
+          data,
+          error,
+        } = await supabase
+          .storage
+          .from(
+            'message-attachments'
+          )
+          .createSignedUrl(
+            item.attachment_path,
+            60 * 60
+          );
+
+        if (
+          error ||
+          !data
+        ) {
+          Alert.alert(
+            'Unable to open attachment',
+            error?.message ??
+              'Please try again.'
+          );
+          return;
+        }
+
+        url =
+          data.signedUrl;
+
+        setAttachmentUrlMap(
+          (current) => ({
+            ...current,
+            [item.id]:
+              url,
+          })
+        );
+      }
+
+      const canOpen =
+        await Linking.canOpenURL(
+          url
+        );
+
+      if (canOpen) {
+        await Linking.openURL(
+          url
+        );
+      } else {
+        Alert.alert(
+          'Unable to open file',
+          'This attachment cannot be opened on this device.'
+        );
+      }
+    };
+
+  const formatFileSize =
+    (
+      bytes:
+        number | null
+    ) => {
+      if (!bytes) {
+        return '';
+      }
+
+      if (
+        bytes < 1024
+      ) {
+        return `${bytes} B`;
+      }
+
+      if (
+        bytes <
+        1024 * 1024
+      ) {
+        return `${(
+          bytes / 1024
+        ).toFixed(1)} KB`;
+      }
+
+      return `${(
+        bytes /
+        (1024 * 1024)
+      ).toFixed(1)} MB`;
+    };
+
   const formatTime =
     (
       timestamp: string
@@ -1451,8 +2008,10 @@ export default function ConversationScreen() {
       ).toLocaleTimeString(
         [],
         {
-          hour: 'numeric',
-          minute: '2-digit',
+          hour:
+            'numeric',
+          minute:
+            '2-digit',
         }
       );
 
@@ -1542,7 +2101,9 @@ export default function ConversationScreen() {
                     1
                   }
                 >
-                  {conversationTitle}
+                  {
+                    conversationTitle
+                  }
                 </Text>
 
                 {isGroup && (
@@ -1588,11 +2149,17 @@ export default function ConversationScreen() {
           </View>
         ) : (
           <FlatList
-            ref={listRef}
-            data={messages}
+            ref={
+              listRef
+            }
+            data={
+              messages
+            }
             keyExtractor={(
               item
-            ) => item.id}
+            ) =>
+              item.id
+            }
             contentContainerStyle={
               styles.messageList
             }
@@ -1624,6 +2191,16 @@ export default function ConversationScreen() {
                 ] ??
                 'Unknown';
 
+              const attachmentUrl =
+                attachmentUrlMap[
+                  item.id
+                ];
+
+              const isImage =
+                item.attachment_type?.startsWith(
+                  'image/'
+                ) ?? false;
+
               return (
                 <Pressable
                   onLongPress={() =>
@@ -1654,7 +2231,9 @@ export default function ConversationScreen() {
                             styles.senderName
                           }
                         >
-                          {senderName}
+                          {
+                            senderName
+                          }
                         </Text>
                       )}
 
@@ -1672,28 +2251,115 @@ export default function ConversationScreen() {
                             1
                           }
                         >
-                          {parent.body}
+                          {
+                            parent.body
+                          }
                         </Text>
                       </View>
                     )}
 
-                    <View
-                      style={
-                        sentByMe
-                          ? styles.sentBubble
-                          : styles.receivedBubble
-                      }
-                    >
-                      <Text
+                    {item.attachment_path &&
+                      isImage &&
+                      attachmentUrl && (
+                        <Pressable
+                          onPress={() =>
+                            openAttachment(
+                              item
+                            )
+                          }
+                        >
+                          <Image
+                            source={{
+                              uri:
+                                attachmentUrl,
+                            }}
+                            style={
+                              styles.attachmentImage
+                            }
+                            resizeMode="cover"
+                          />
+                        </Pressable>
+                      )}
+
+                    {item.attachment_path &&
+                      !isImage && (
+                        <Pressable
+                          style={
+                            sentByMe
+                              ? styles.sentFileCard
+                              : styles.receivedFileCard
+                          }
+                          onPress={() =>
+                            openAttachment(
+                              item
+                            )
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.fileIcon
+                            }
+                          >
+                            📎
+                          </Text>
+
+                          <View
+                            style={
+                              styles.fileInfo
+                            }
+                          >
+                            <Text
+                              style={
+                                sentByMe
+                                  ? styles.sentFileName
+                                  : styles.receivedFileName
+                              }
+                              numberOfLines={
+                                1
+                              }
+                            >
+                              {item.attachment_name ??
+                                'Attachment'}
+                            </Text>
+
+                            {item.attachment_size ? (
+                              <Text
+                                style={
+                                  sentByMe
+                                    ? styles.sentFileSize
+                                    : styles.receivedFileSize
+                                }
+                              >
+                                {formatFileSize(
+                                  item.attachment_size
+                                )}
+                              </Text>
+                            ) : null}
+                          </View>
+                        </Pressable>
+                      )}
+
+                    {item.body ? (
+                      <View
                         style={
                           sentByMe
-                            ? styles.sentText
-                            : styles.receivedText
+                            ? styles.sentBubble
+                            : styles.receivedBubble
                         }
                       >
-                        {item.body}
-                      </Text>
-                    </View>
+                        <Text
+                          style={
+                            sentByMe
+                              ? styles.sentText
+                              : styles.receivedText
+                          }
+                        >
+                          {
+                            item.body
+                          }
+                        </Text>
+                      </View>
+                    ) : null}
 
                     {reactions.length >
                       0 && (
@@ -1747,9 +2413,11 @@ export default function ConversationScreen() {
                             ? 'Read '
                             : 'Sent '
                           : ''}
+
                         {formatTime(
                           item.created_at
                         )}
+
                         {item.edited_at
                           ? ' · Edited'
                           : ''}
@@ -1813,6 +2481,57 @@ export default function ConversationScreen() {
           </View>
         )}
 
+        {pendingAttachment && (
+          <View
+            style={
+              styles.pendingAttachment
+            }
+          >
+            <View
+              style={
+                styles.pendingAttachmentInfo
+              }
+            >
+              <Text
+                style={
+                  styles.pendingAttachmentLabel
+                }
+              >
+                Attachment
+              </Text>
+
+              <Text
+                style={
+                  styles.pendingAttachmentName
+                }
+                numberOfLines={
+                  1
+                }
+              >
+                {
+                  pendingAttachment.name
+                }
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={() =>
+                setPendingAttachment(
+                  null
+                )
+              }
+            >
+              <Text
+                style={
+                  styles.removeAttachment
+                }
+              >
+                ×
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
         {typingText ? (
           <View
             style={
@@ -1824,7 +2543,9 @@ export default function ConversationScreen() {
                 styles.typingBarText
               }
             >
-              {typingText}
+              {
+                typingText
+              }
             </Text>
           </View>
         ) : null}
@@ -1834,15 +2555,40 @@ export default function ConversationScreen() {
             styles.composer
           }
         >
+          <Pressable
+            style={
+              styles.attachmentButton
+            }
+            onPress={
+              showAttachmentMenu
+            }
+            disabled={
+              sending ||
+              uploading
+            }
+          >
+            <Text
+              style={
+                styles.attachmentButtonText
+              }
+            >
+              ATT
+            </Text>
+          </Pressable>
+
           <TextInput
-            value={message}
+            value={
+              message
+            }
             onChangeText={
               handleMessageChange
             }
             placeholder={
-              replyingTo
-                ? 'Write a reply'
-                : 'Message'
+              pendingAttachment
+                ? 'Add a message'
+                : replyingTo
+                  ? 'Write a reply'
+                  : 'Message'
             }
             placeholderTextColor="#98A2B3"
             style={
@@ -1853,28 +2599,38 @@ export default function ConversationScreen() {
 
           <Pressable
             disabled={
-              !message.trim() ||
-              sending
+              (!message.trim() &&
+                !pendingAttachment) ||
+              sending ||
+              uploading
             }
             style={[
               styles.sendButton,
-              (!message.trim() ||
-                sending) &&
+              ((!message.trim() &&
+                !pendingAttachment) ||
+                sending ||
+                uploading) &&
                 styles.sendButtonDisabled,
             ]}
             onPress={
               sendMessage
             }
           >
-            <Text
-              style={
-                styles.sendText
-              }
-            >
-              {sending
-                ? '…'
-                : '↑'}
-            </Text>
+            {sending ||
+            uploading ? (
+              <ActivityIndicator
+                size="small"
+                color="#FFFFFF"
+              />
+            ) : (
+              <Text
+                style={
+                  styles.sendText
+                }
+              >
+                ↑
+              </Text>
+            )}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -2039,6 +2795,70 @@ const styles =
       color: '#667085',
     },
 
+    attachmentImage: {
+      width: 230,
+      height: 180,
+      borderRadius: 16,
+      marginBottom: 5,
+      backgroundColor:
+        '#EAECF0',
+    },
+
+    receivedFileCard: {
+      minWidth: 220,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor:
+        '#EAECF0',
+      borderRadius: 16,
+      padding: 12,
+      marginBottom: 5,
+    },
+
+    sentFileCard: {
+      minWidth: 220,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor:
+        '#3157C8',
+      borderRadius: 16,
+      padding: 12,
+      marginBottom: 5,
+    },
+
+    fileIcon: {
+      fontSize: 25,
+      marginRight: 10,
+    },
+
+    fileInfo: {
+      flex: 1,
+    },
+
+    receivedFileName: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#101828',
+    },
+
+    sentFileName: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: '#FFFFFF',
+    },
+
+    receivedFileSize: {
+      marginTop: 3,
+      fontSize: 11,
+      color: '#667085',
+    },
+
+    sentFileSize: {
+      marginTop: 3,
+      fontSize: 11,
+      color: '#DDE4FF',
+    },
+
     receivedBubble: {
       backgroundColor:
         '#EAECF0',
@@ -2133,6 +2953,40 @@ const styles =
       paddingLeft: 12,
     },
 
+    pendingAttachment: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor:
+        '#EEF2FF',
+      borderTopWidth: 1,
+      borderTopColor:
+        '#D9E0FF',
+      paddingHorizontal: 16,
+      paddingVertical: 9,
+    },
+
+    pendingAttachmentInfo: {
+      flex: 1,
+    },
+
+    pendingAttachmentLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: '#4169E1',
+    },
+
+    pendingAttachmentName: {
+      marginTop: 2,
+      fontSize: 13,
+      color: '#344054',
+    },
+
+    removeAttachment: {
+      fontSize: 28,
+      color: '#667085',
+      paddingLeft: 12,
+    },
+
     typingBar: {
       minHeight: 24,
       paddingHorizontal: 20,
@@ -2152,7 +3006,7 @@ const styles =
       flexDirection: 'row',
       alignItems:
         'flex-end',
-      paddingHorizontal: 14,
+      paddingHorizontal: 12,
       paddingTop: 10,
       paddingBottom: 12,
       borderTopWidth: 1,
@@ -2160,6 +3014,27 @@ const styles =
         '#EAECF0',
       backgroundColor:
         '#FFFFFF',
+    },
+
+    attachmentButton: {
+      width: 58,
+      height: 44,
+      borderRadius: 12,
+      marginRight: 8,
+      backgroundColor:
+        '#EEF2FF',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      borderWidth: 1,
+      borderColor:
+        '#4169E1',
+    },
+
+    attachmentButtonText: {
+      color: '#4169E1',
+      fontSize: 12,
+      fontWeight: '800',
     },
 
     input: {
@@ -2183,7 +3058,7 @@ const styles =
       width: 44,
       height: 44,
       borderRadius: 22,
-      marginLeft: 9,
+      marginLeft: 8,
       backgroundColor:
         '#4169E1',
       alignItems: 'center',
