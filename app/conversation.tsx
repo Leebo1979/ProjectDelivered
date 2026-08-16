@@ -27,6 +27,8 @@ type OtherUser = {
   username: string;
 };
 
+type ReadMap = Record<string, boolean>;
+
 export default function ConversationScreen() {
   const { conversationId } = useLocalSearchParams<{
     conversationId: string;
@@ -36,6 +38,7 @@ export default function ConversationScreen() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+
   const [currentUserId, setCurrentUserId] =
     useState<string | null>(null);
 
@@ -44,6 +47,9 @@ export default function ConversationScreen() {
 
   const [conversationTitle, setConversationTitle] =
     useState('Conversation');
+
+  const [readMap, setReadMap] =
+    useState<ReadMap>({});
 
   const listRef = useRef<FlatList<Message>>(null);
 
@@ -54,7 +60,7 @@ export default function ConversationScreen() {
 
     loadConversation();
 
-    const channel = supabase
+    const messageChannel = supabase
       .channel(`conversation:${conversationId}`)
       .on(
         'postgres_changes',
@@ -64,33 +70,63 @@ export default function ConversationScreen() {
           table: 'messages',
           filter: `conversation_id=eq.${conversationId}`,
         },
-        (payload) => {
+        async (payload) => {
           const newMessage = payload.new as Message;
 
-          setMessages((currentMessages) => {
-            const alreadyExists =
-              currentMessages.some(
-                (item) =>
-                  item.id === newMessage.id
-              );
+          setMessages((current) => {
+            const exists = current.some(
+              (item) => item.id === newMessage.id
+            );
 
-            if (alreadyExists) {
-              return currentMessages;
+            if (exists) {
+              return current;
             }
 
-            return [
-              ...currentMessages,
-              newMessage,
-            ];
+            return [...current, newMessage];
           });
+
+          if (
+            currentUserId &&
+            newMessage.sender_id !== currentUserId
+          ) {
+            await markMessageRead(newMessage.id);
+          }
+        }
+      )
+      .subscribe();
+
+    const readChannel = supabase
+      .channel(`reads:${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'message_reads',
+        },
+        async (payload) => {
+          const read = payload.new as {
+            message_id: string;
+            user_id: string;
+          };
+
+          if (
+            read.user_id !== currentUserId
+          ) {
+            setReadMap((current) => ({
+              ...current,
+              [read.message_id]: true,
+            }));
+          }
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(messageChannel);
+      supabase.removeChannel(readChannel);
     };
-  }, [conversationId]);
+  }, [conversationId, currentUserId]);
 
   useEffect(() => {
     if (messages.length === 0) {
@@ -116,10 +152,7 @@ export default function ConversationScreen() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        console.error(
-          'User load error:',
-          userError
-        );
+        console.error('User load error:', userError);
         return;
       }
 
@@ -130,9 +163,7 @@ export default function ConversationScreen() {
         error: conversationError,
       } = await supabase
         .from('conversations')
-        .select(
-          'id, title, is_group'
-        )
+        .select('id, title, is_group')
         .eq('id', conversationId)
         .single();
 
@@ -146,8 +177,7 @@ export default function ConversationScreen() {
       if (conversation) {
         if (conversation.is_group) {
           setConversationTitle(
-            conversation.title ??
-              'Group Conversation'
+            conversation.title ?? 'Group Conversation'
           );
         } else {
           const {
@@ -203,8 +233,7 @@ export default function ConversationScreen() {
               }
             } else {
               setConversationTitle(
-                conversation.title ??
-                  'Conversation'
+                conversation.title ?? 'Conversation'
               );
             }
           }
@@ -233,7 +262,53 @@ export default function ConversationScreen() {
         return;
       }
 
-      setMessages(data ?? []);
+      const loadedMessages = data ?? [];
+
+      setMessages(loadedMessages);
+
+      const incomingMessages =
+        loadedMessages.filter(
+          (item) =>
+            item.sender_id !== user.id
+        );
+
+      for (const item of incomingMessages) {
+        await markMessageRead(item.id);
+      }
+
+      const sentMessageIds =
+        loadedMessages
+          .filter(
+            (item) =>
+              item.sender_id === user.id
+          )
+          .map((item) => item.id);
+
+      if (sentMessageIds.length > 0) {
+        const {
+          data: reads,
+          error: readsError,
+        } = await supabase
+          .from('message_reads')
+          .select('message_id, user_id')
+          .in(
+            'message_id',
+            sentMessageIds
+          )
+          .neq('user_id', user.id);
+
+        if (!readsError) {
+          const nextReadMap: ReadMap = {};
+
+          for (const read of reads ?? []) {
+            nextReadMap[
+              read.message_id
+            ] = true;
+          }
+
+          setReadMap(nextReadMap);
+        }
+      }
     } catch (error) {
       console.error(
         'Conversation load error:',
@@ -241,6 +316,62 @@ export default function ConversationScreen() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const markMessageRead = async (
+    messageId: string
+  ) => {
+    if (!currentUserId) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return;
+      }
+
+      const { error } = await supabase
+        .from('message_reads')
+        .upsert(
+          {
+            message_id: messageId,
+            user_id: user.id,
+          },
+          {
+            onConflict:
+              'message_id,user_id',
+          }
+        );
+
+      if (error) {
+        console.error(
+          'Read receipt error:',
+          error
+        );
+      }
+
+      return;
+    }
+
+    const { error } = await supabase
+      .from('message_reads')
+      .upsert(
+        {
+          message_id: messageId,
+          user_id: currentUserId,
+        },
+        {
+          onConflict:
+            'message_id,user_id',
+        }
+      );
+
+    if (error) {
+      console.error(
+        'Read receipt error:',
+        error
+      );
     }
   };
 
@@ -281,24 +412,18 @@ export default function ConversationScreen() {
         return;
       }
 
-      setMessages(
-        (currentMessages) => {
-          const alreadyExists =
-            currentMessages.some(
-              (item) =>
-                item.id === data.id
-            );
+      setMessages((current) => {
+        const exists = current.some(
+          (item) =>
+            item.id === data.id
+        );
 
-          if (alreadyExists) {
-            return currentMessages;
-          }
-
-          return [
-            ...currentMessages,
-            data,
-          ];
+        if (exists) {
+          return current;
         }
-      );
+
+        return [...current, data];
+      });
 
       setMessage('');
     } catch (error) {
@@ -402,6 +527,9 @@ export default function ConversationScreen() {
                 item.sender_id ===
                 currentUserId;
 
+              const isRead =
+                readMap[item.id] === true;
+
               return (
                 <View
                   style={
@@ -441,7 +569,9 @@ export default function ConversationScreen() {
                       }
                     >
                       {sentByMe
-                        ? 'Sent '
+                        ? isRead
+                          ? 'Read '
+                          : 'Sent '
                         : ''}
                       {formatTime(
                         item.created_at
