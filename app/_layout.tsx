@@ -448,6 +448,10 @@ export default function RootLayout() {
         />
 
         <Stack.Screen
+          name="archived-chats"
+        />
+
+        <Stack.Screen
           name="modal"
         />
       </Stack>

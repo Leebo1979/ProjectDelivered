@@ -70,6 +70,10 @@ export default function ChatsScreen() {
       ReturnType<typeof supabase.channel> | null =
       null;
 
+    let archiveChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
     let cancelled = false;
 
     const subscribeToRealtime =
@@ -189,6 +193,29 @@ export default function ChatsScreen() {
               }
             )
             .subscribe();
+
+        archiveChannel =
+          supabase
+            .channel(
+              `chat-list-archives:${user.id}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'archived_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
       };
 
     subscribeToRealtime();
@@ -225,6 +252,14 @@ export default function ChatsScreen() {
       ) {
         supabase.removeChannel(
           pinChannel
+        );
+      }
+
+      if (
+        archiveChannel
+      ) {
+        supabase.removeChannel(
+          archiveChannel
         );
       }
     };
@@ -383,11 +418,56 @@ export default function ChatsScreen() {
           )
         );
 
+      const {
+        data: archivedRows,
+        error: archivedError,
+      } = await supabase
+        .from(
+          'archived_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (archivedError) {
+        console.error(
+          'Archived conversations load error:',
+          archivedError
+        );
+      }
+
+      const archivedIds =
+        new Set(
+          (
+            archivedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
+
+      const visibleConversations =
+        (
+          conversations as ConversationRow[]
+        ).filter(
+          (conversation) =>
+            !archivedIds.has(
+              conversation.id
+            )
+        );
+
       const chatItems =
         await Promise.all(
-          (
-            conversations as ConversationRow[]
-          ).map(
+          visibleConversations.map(
             async (
               conversation
             ) => {
@@ -920,6 +1000,76 @@ export default function ChatsScreen() {
       );
     };
 
+  const archiveConversation =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Archive Conversation',
+        `Archive ${chat.displayName}?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Archive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } = await supabase
+                  .from(
+                    'archived_conversations'
+                  )
+                  .insert({
+                    user_id:
+                      user.id,
+                    conversation_id:
+                      chat.id,
+                  });
+
+                if (error) {
+                  Alert.alert(
+                    'Unable to archive',
+                    error.message
+                  );
+                  return;
+                }
+
+                setChats(
+                  (current) =>
+                    current.filter(
+                      (item) =>
+                        item.id !==
+                        chat.id
+                    )
+                );
+              },
+          },
+        ]
+      );
+    };
+
   const showChatActions =
     (
       chat: ChatListItem
@@ -947,6 +1097,14 @@ export default function ChatsScreen() {
                 : 'Mute Notifications',
             onPress: () =>
               toggleMute(
+                chat
+              ),
+          },
+          {
+            text:
+              'Archive Conversation',
+            onPress: () =>
+              archiveConversation(
                 chat
               ),
           },
@@ -996,6 +1154,13 @@ export default function ChatsScreen() {
     () => {
       router.push(
         '/search-messages'
+      );
+    };
+
+  const openArchived =
+    () => {
+      router.push(
+        '/archived-chats'
       );
     };
 
@@ -1173,6 +1338,23 @@ export default function ChatsScreen() {
                 }
               >
                 ★
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={
+                styles.archivedButton
+              }
+              onPress={
+                openArchived
+              }
+            >
+              <Text
+                style={
+                  styles.archivedButtonText
+                }
+              >
+                ARCH
               </Text>
             </Pressable>
 
@@ -1556,6 +1738,30 @@ const styles =
       fontSize: 22,
       color:
         '#F79009',
+    },
+
+    archivedButton: {
+      width: 54,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+    },
+
+    archivedButtonText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      color:
+        '#667085',
     },
 
     newChatButton: {
