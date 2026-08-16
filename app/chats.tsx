@@ -74,6 +74,10 @@ export default function ChatsScreen() {
       ReturnType<typeof supabase.channel> | null =
       null;
 
+    let deletedChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
     let cancelled = false;
 
     const subscribeToRealtime =
@@ -216,6 +220,29 @@ export default function ChatsScreen() {
               }
             )
             .subscribe();
+
+        deletedChannel =
+          supabase
+            .channel(
+              `chat-list-deleted:${user.id}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'deleted_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
       };
 
     subscribeToRealtime();
@@ -260,6 +287,14 @@ export default function ChatsScreen() {
       ) {
         supabase.removeChannel(
           archiveChannel
+        );
+      }
+
+      if (
+        deletedChannel
+      ) {
+        supabase.removeChannel(
+          deletedChannel
         );
       }
     };
@@ -455,12 +490,52 @@ export default function ChatsScreen() {
           )
         );
 
+      const {
+        data: deletedRows,
+        error: deletedError,
+      } = await supabase
+        .from(
+          'deleted_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (deletedError) {
+        console.error(
+          'Deleted conversations load error:',
+          deletedError
+        );
+      }
+
+      const deletedIds =
+        new Set(
+          (
+            deletedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
+
       const visibleConversations =
         (
           conversations as ConversationRow[]
         ).filter(
           (conversation) =>
             !archivedIds.has(
+              conversation.id
+            ) &&
+            !deletedIds.has(
               conversation.id
             )
         );
@@ -1000,6 +1075,259 @@ export default function ChatsScreen() {
       );
     };
 
+  const deleteDirectConversation =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Delete Chat',
+        `Remove ${chat.displayName} from your Chats list? This will not delete the other person's copy or the shared message history.`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Delete Chat',
+            style:
+              'destructive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } = await supabase
+                  .from(
+                    'deleted_conversations'
+                  )
+                  .upsert(
+                    {
+                      user_id:
+                        user.id,
+                      conversation_id:
+                        chat.id,
+                    },
+                    {
+                      onConflict:
+                        'user_id,conversation_id',
+                    }
+                  );
+
+                if (error) {
+                  Alert.alert(
+                    'Unable to delete chat',
+                    error.message
+                  );
+                  return;
+                }
+
+                setChats(
+                  (current) =>
+                    current.filter(
+                      (item) =>
+                        item.id !==
+                        chat.id
+                    )
+                );
+              },
+          },
+        ]
+      );
+    };
+
+  const leaveGroup =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      const {
+        data: membership,
+        error:
+          membershipError,
+      } = await supabase
+        .from(
+          'conversation_members'
+        )
+        .select(
+          'role'
+        )
+        .eq(
+          'conversation_id',
+          chat.id
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .maybeSingle();
+
+      if (
+        membershipError
+      ) {
+        Alert.alert(
+          'Unable to leave group',
+          membershipError.message
+        );
+        return;
+      }
+
+      if (
+        membership?.role ===
+        'owner'
+      ) {
+        Alert.alert(
+          'Transfer ownership first',
+          'You are the owner of this group. Transfer ownership to another member before leaving.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Leave Group',
+        `Leave ${chat.displayName}?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Leave Group',
+            style:
+              'destructive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } = await supabase
+                  .from(
+                    'conversation_members'
+                  )
+                  .delete()
+                  .eq(
+                    'conversation_id',
+                    chat.id
+                  )
+                  .eq(
+                    'user_id',
+                    user.id
+                  );
+
+                if (error) {
+                  Alert.alert(
+                    'Unable to leave group',
+                    error.message
+                  );
+                  return;
+                }
+
+                await Promise.all([
+                  supabase
+                    .from(
+                      'muted_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+
+                  supabase
+                    .from(
+                      'pinned_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+
+                  supabase
+                    .from(
+                      'archived_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+
+                  supabase
+                    .from(
+                      'deleted_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+                ]);
+
+                setChats(
+                  (current) =>
+                    current.filter(
+                      (item) =>
+                        item.id !==
+                        chat.id
+                    )
+                );
+              },
+          },
+        ]
+      );
+    };
+
   const archiveConversation =
     async (
       chat: ChatListItem
@@ -1107,6 +1435,22 @@ export default function ChatsScreen() {
               archiveConversation(
                 chat
               ),
+          },
+          {
+            text:
+              chat.isGroup
+                ? 'Leave Group'
+                : 'Delete Chat',
+            style:
+              'destructive',
+            onPress: () =>
+              chat.isGroup
+                ? leaveGroup(
+                    chat
+                  )
+                : deleteDirectConversation(
+                    chat
+                  ),
           },
           {
             text:
