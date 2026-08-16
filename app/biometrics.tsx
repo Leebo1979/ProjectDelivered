@@ -1,13 +1,17 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { router } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import { useEffect, useState } from 'react';
 import {
-    Alert,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
+
+const BIOMETRICS_KEY = 'project_delivered_biometrics_enabled';
+const ONBOARDING_KEY = 'project_delivered_onboarding_complete';
 
 export default function BiometricsScreen() {
   const [available, setAvailable] = useState(false);
@@ -34,51 +38,70 @@ export default function BiometricsScreen() {
     }
   };
 
+  const finishOnboarding = async (
+    biometricsEnabled: boolean
+  ) => {
+    await SecureStore.setItemAsync(
+      BIOMETRICS_KEY,
+      biometricsEnabled ? 'true' : 'false'
+    );
+
+    await SecureStore.setItemAsync(
+      ONBOARDING_KEY,
+      'true'
+    );
+
+    router.replace('/chats');
+  };
+
   const enableBiometrics = async () => {
     try {
       const result =
         await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Unlock Project Delivered',
+          promptMessage: 'Enable Face ID for Project Delivered',
           cancelLabel: 'Cancel',
           fallbackLabel: 'Use Passcode',
         });
 
       if (result.success) {
-        Alert.alert(
-          'Biometrics enabled',
-          'You can use Face ID or Touch ID to unlock Project Delivered.',
-          [
-            {
-              text: 'Continue',
-              onPress: () => router.replace('/chats'),
-            },
-          ]
-        );
+        await finishOnboarding(true);
       }
     } catch (error) {
       console.error(error);
 
       Alert.alert(
-        'Biometric authentication unavailable',
+        'Biometrics unavailable',
         'You can continue using your PIN.'
       );
     }
   };
 
-  const skipBiometrics = () => {
-    router.replace('/chats');
+  const skipBiometrics = async () => {
+    try {
+      await finishOnboarding(false);
+    } catch (error) {
+      console.error(error);
+
+      Alert.alert(
+        'Unable to continue',
+        'Please try again.'
+      );
+    }
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.eyebrow}>APP SECURITY</Text>
+      <Text style={styles.eyebrow}>
+        APP SECURITY
+      </Text>
 
       <Text style={styles.title}>
         Unlock Faster
       </Text>
 
       <Text style={styles.subtitle}>
-        Use Face ID or Touch ID to unlock Project Delivered without entering your PIN each time.
+        Use Face ID or Touch ID to unlock Project Delivered
+        without entering your PIN each time.
       </Text>
 
       <View style={styles.icon}>
@@ -119,6 +142,7 @@ const styles = StyleSheet.create({
     paddingTop: 80,
     backgroundColor: '#F7F8FA',
   },
+
   eyebrow: {
     fontSize: 13,
     fontWeight: '700',
@@ -126,6 +150,7 @@ const styles = StyleSheet.create({
     color: '#4169E1',
     marginBottom: 14,
   },
+
   title: {
     fontSize: 36,
     lineHeight: 42,
@@ -133,12 +158,14 @@ const styles = StyleSheet.create({
     color: '#101828',
     marginBottom: 14,
   },
+
   subtitle: {
     fontSize: 18,
     lineHeight: 27,
     color: '#475467',
     marginBottom: 48,
   },
+
   icon: {
     width: 120,
     height: 120,
@@ -149,10 +176,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 48,
   },
+
   iconText: {
     fontSize: 60,
     color: '#4169E1',
   },
+
   button: {
     height: 54,
     borderRadius: 14,
@@ -160,14 +189,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#4169E1',
   },
+
   buttonDisabled: {
     opacity: 0.4,
   },
+
   buttonText: {
     fontSize: 17,
     fontWeight: '700',
     color: '#FFFFFF',
   },
+
   skipText: {
     textAlign: 'center',
     marginTop: 22,

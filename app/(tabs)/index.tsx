@@ -1,7 +1,47 @@
 import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+const ONBOARDING_KEY = 'project_delivered_onboarding_complete';
 
 export default function HomeScreen() {
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    checkSetupStatus();
+  }, []);
+
+  const checkSetupStatus = async () => {
+    try {
+      const onboardingComplete =
+        await SecureStore.getItemAsync(ONBOARDING_KEY);
+
+      if (onboardingComplete === 'true') {
+        router.replace('/unlock');
+        return;
+      }
+    } catch (error) {
+      console.error('Unable to check onboarding state:', error);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  if (checking) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#4169E1" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <Text style={styles.eyebrow}>PRIVATE MESSAGING</Text>
@@ -23,12 +63,20 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7F8FA',
+  },
+
   container: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 28,
     backgroundColor: '#F7F8FA',
   },
+
   eyebrow: {
     fontSize: 13,
     fontWeight: '700',
@@ -36,6 +84,7 @@ const styles = StyleSheet.create({
     color: '#4169E1',
     marginBottom: 14,
   },
+
   title: {
     fontSize: 42,
     lineHeight: 48,
@@ -43,12 +92,14 @@ const styles = StyleSheet.create({
     color: '#101828',
     marginBottom: 18,
   },
+
   subtitle: {
     fontSize: 19,
     lineHeight: 28,
     color: '#475467',
     marginBottom: 36,
   },
+
   button: {
     alignSelf: 'flex-start',
     backgroundColor: '#4169E1',
@@ -56,6 +107,7 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 14,
   },
+
   buttonText: {
     color: '#FFFFFF',
     fontSize: 17,

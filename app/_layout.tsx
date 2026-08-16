@@ -14,6 +14,7 @@ export default function RootLayout() {
         <Stack.Screen name="create-profile" />
         <Stack.Screen name="create-pin" />
         <Stack.Screen name="biometrics" />
+        <Stack.Screen name="unlock" />
         <Stack.Screen name="chats" />
       </Stack>
 
