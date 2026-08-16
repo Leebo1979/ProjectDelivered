@@ -414,6 +414,13 @@ export default function ChatsScreen() {
       );
     };
 
+  const openSearch =
+    () => {
+      router.push(
+        '/search-messages'
+      );
+    };
+
   const signOut =
     async () => {
       try {
@@ -555,6 +562,23 @@ export default function ChatsScreen() {
               styles.headerActions
             }
           >
+            <Pressable
+              style={
+                styles.searchButton
+              }
+              onPress={
+                openSearch
+              }
+            >
+              <Text
+                style={
+                  styles.searchIcon
+                }
+              >
+                ⌕
+              </Text>
+            </Pressable>
+
             <Pressable
               style={
                 styles.favouritesButton
@@ -880,6 +904,30 @@ const styles =
       fontWeight: '800',
       color:
         '#101828',
+    },
+
+    searchButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+    },
+
+    searchIcon: {
+      fontSize: 26,
+      lineHeight: 28,
+      color:
+        '#4169E1',
+      fontWeight: '600',
     },
 
     favouritesButton: {
