@@ -13,16 +13,53 @@ import {
 import { supabase } from '../lib/supabase';
 
 export default function SignUpScreen() {
-  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
+  const [mode, setMode] =
+    useState<'sign-in' | 'sign-up'>('sign-in');
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [working, setWorking] = useState(false);
 
+  const routeAfterAuthentication = async (
+    userId: string
+  ) => {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error(
+        'Profile lookup error:',
+        error
+      );
+
+      Alert.alert(
+        'Unable to load profile',
+        error.message
+      );
+
+      return;
+    }
+
+    if (profile) {
+      router.replace('/chats');
+    } else {
+      router.replace('/create-profile');
+    }
+  };
+
   const submit = async () => {
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail =
+      email.trim().toLowerCase();
 
     if (!cleanEmail) {
-      Alert.alert('Email required', 'Please enter your email address.');
+      Alert.alert(
+        'Email required',
+        'Please enter your email address.'
+      );
+
       return;
     }
 
@@ -31,6 +68,7 @@ export default function SignUpScreen() {
         'Password too short',
         'Please use at least 8 characters.'
       );
+
       return;
     }
 
@@ -45,7 +83,11 @@ export default function SignUpScreen() {
           });
 
         if (error) {
-          Alert.alert('Unable to sign in', error.message);
+          Alert.alert(
+            'Unable to sign in',
+            error.message
+          );
+
           return;
         }
 
@@ -54,10 +96,14 @@ export default function SignUpScreen() {
             'Sign in failed',
             'No active session was returned.'
           );
+
           return;
         }
 
-        router.replace('/create-profile');
+        await routeAfterAuthentication(
+          data.session.user.id
+        );
+
         return;
       }
 
@@ -68,7 +114,11 @@ export default function SignUpScreen() {
         });
 
       if (error) {
-        Alert.alert('Unable to create account', error.message);
+        Alert.alert(
+          'Unable to create account',
+          error.message
+        );
+
         return;
       }
 
@@ -77,12 +127,18 @@ export default function SignUpScreen() {
           'Account created',
           'Your account was created, but no active session was returned.'
         );
+
         return;
       }
 
-      router.replace('/create-profile');
+      await routeAfterAuthentication(
+        data.session.user.id
+      );
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Authentication error:',
+        error
+      );
 
       Alert.alert(
         'Something went wrong',
@@ -96,20 +152,26 @@ export default function SignUpScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.eyebrow}>PROJECT DELIVERED</Text>
+        <Text style={styles.eyebrow}>
+          PROJECT DELIVERED
+        </Text>
 
         <Text style={styles.title}>
-          {mode === 'sign-in' ? 'Sign In' : 'Create Account'}
+          {mode === 'sign-in'
+            ? 'Sign In'
+            : 'Create Account'}
         </Text>
 
         <Text style={styles.subtitle}>
           {mode === 'sign-in'
-            ? 'Sign in to continue to your profile and conversations.'
+            ? 'Sign in to continue to your conversations.'
             : 'Create an account so your profile and conversations can sync securely.'}
         </Text>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Email</Text>
+          <Text style={styles.label}>
+            Email
+          </Text>
 
           <TextInput
             value={email}
@@ -124,7 +186,9 @@ export default function SignUpScreen() {
         </View>
 
         <View style={styles.field}>
-          <Text style={styles.label}>Password</Text>
+          <Text style={styles.label}>
+            Password
+          </Text>
 
           <TextInput
             value={password}
@@ -141,7 +205,8 @@ export default function SignUpScreen() {
           disabled={working}
           style={[
             styles.button,
-            working && styles.buttonDisabled,
+            working &&
+              styles.buttonDisabled,
           ]}
           onPress={submit}
         >
@@ -156,7 +221,11 @@ export default function SignUpScreen() {
 
         <Pressable
           onPress={() =>
-            setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')
+            setMode(
+              mode === 'sign-in'
+                ? 'sign-up'
+                : 'sign-in'
+            )
           }
         >
           <Text style={styles.switchText}>
@@ -175,11 +244,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F7F8FA',
   },
+
   container: {
     flex: 1,
     paddingHorizontal: 28,
     paddingTop: 60,
   },
+
   eyebrow: {
     fontSize: 13,
     fontWeight: '700',
@@ -187,6 +258,7 @@ const styles = StyleSheet.create({
     color: '#4169E1',
     marginBottom: 14,
   },
+
   title: {
     fontSize: 36,
     lineHeight: 42,
@@ -194,21 +266,25 @@ const styles = StyleSheet.create({
     color: '#101828',
     marginBottom: 14,
   },
+
   subtitle: {
     fontSize: 17,
     lineHeight: 25,
     color: '#475467',
     marginBottom: 36,
   },
+
   field: {
     marginBottom: 22,
   },
+
   label: {
     fontSize: 15,
     fontWeight: '600',
     color: '#344054',
     marginBottom: 8,
   },
+
   input: {
     height: 52,
     borderWidth: 1,
@@ -219,6 +295,7 @@ const styles = StyleSheet.create({
     color: '#101828',
     backgroundColor: '#FFFFFF',
   },
+
   button: {
     height: 54,
     marginTop: 10,
@@ -227,14 +304,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#4169E1',
   },
+
   buttonDisabled: {
     opacity: 0.5,
   },
+
   buttonText: {
     fontSize: 17,
     fontWeight: '700',
     color: '#FFFFFF',
   },
+
   switchText: {
     marginTop: 22,
     textAlign: 'center',

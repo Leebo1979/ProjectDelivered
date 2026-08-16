@@ -27,7 +27,6 @@ type Conversation = {
 export default function ChatsScreen() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     loadConversations();
@@ -65,7 +64,9 @@ export default function ChatsScreen() {
       }
 
       const conversationIds =
-        memberships?.map((item) => item.conversation_id) ?? [];
+        memberships?.map(
+          (item) => item.conversation_id
+        ) ?? [];
 
       if (conversationIds.length === 0) {
         setConversations([]);
@@ -74,9 +75,13 @@ export default function ChatsScreen() {
 
       const { data, error } = await supabase
         .from('conversations')
-        .select('id, title, is_group, created_at')
+        .select(
+          'id, title, is_group, created_at'
+        )
         .in('id', conversationIds)
-        .order('created_at', { ascending: false });
+        .order('created_at', {
+          ascending: false,
+        });
 
       if (error) {
         Alert.alert(
@@ -88,7 +93,10 @@ export default function ChatsScreen() {
 
       setConversations(data ?? []);
     } catch (error) {
-      console.error('Load conversations error:', error);
+      console.error(
+        'Load conversations error:',
+        error
+      );
 
       Alert.alert(
         'Unable to load chats',
@@ -99,111 +107,66 @@ export default function ChatsScreen() {
     }
   };
 
-  const createTestConversation = async () => {
+  const signOut = async () => {
     try {
-      setCreating(true);
+      const { error } =
+        await supabase.auth.signOut();
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
+      if (error) {
         Alert.alert(
-          'Not signed in',
-          'Please sign in again.'
+          'Unable to sign out',
+          error.message
         );
         return;
       }
 
-      const { data: conversation, error: conversationError } =
-        await supabase
-          .from('conversations')
-          .insert({
-            title: 'Test Conversation',
-            is_group: false,
-            created_by: user.id,
-          })
-          .select()
-          .single();
-
-      if (conversationError || !conversation) {
-        Alert.alert(
-          'Unable to create chat',
-          conversationError?.message ??
-            'The conversation could not be created.'
-        );
-        return;
-      }
-
-      const { error: memberError } = await supabase
-        .from('conversation_members')
-        .insert({
-          conversation_id: conversation.id,
-          user_id: user.id,
-          role: 'owner',
-        });
-
-      if (memberError) {
-        Alert.alert(
-          'Conversation created, but membership failed',
-          memberError.message
-        );
-        return;
-      }
-
-      const { error: messageError } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: conversation.id,
-          sender_id: user.id,
-          body: 'Welcome to your first Supabase conversation 👋',
-        });
-
-      if (messageError) {
-        Alert.alert(
-          'Conversation created, but message failed',
-          messageError.message
-        );
-      }
-
-      await loadConversations();
-
-      Alert.alert(
-        'Conversation created',
-        'Your first Supabase-backed conversation is ready.'
-      );
+      router.replace('/sign-up');
     } catch (error) {
-      console.error('Create conversation error:', error);
+      console.error(
+        'Sign out error:',
+        error
+      );
 
       Alert.alert(
-        'Unable to create conversation',
+        'Unable to sign out',
         'Please try again.'
       );
-    } finally {
-      setCreating(false);
     }
   };
 
-  const resetDevelopmentState = async () => {
-    try {
-      await SecureStore.deleteItemAsync(ONBOARDING_KEY);
-      await SecureStore.deleteItemAsync(BIOMETRICS_KEY);
-      await SecureStore.deleteItemAsync(PIN_STORAGE_KEY);
+  const resetDevelopmentState =
+    async () => {
+      try {
+        await SecureStore.deleteItemAsync(
+          ONBOARDING_KEY
+        );
 
-      router.replace('/');
-    } catch (error) {
-      console.error('Reset error:', error);
+        await SecureStore.deleteItemAsync(
+          BIOMETRICS_KEY
+        );
 
-      Alert.alert(
-        'Reset failed',
-        'Project Delivered could not clear the local development state.'
-      );
-    }
-  };
+        await SecureStore.deleteItemAsync(
+          PIN_STORAGE_KEY
+        );
+
+        router.replace('/');
+      } catch (error) {
+        console.error(
+          'Reset error:',
+          error
+        );
+
+        Alert.alert(
+          'Reset failed',
+          'Project Delivered could not clear the local development state.'
+        );
+      }
+    };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={styles.safeArea}
+    >
       <View style={styles.container}>
         <View style={styles.header}>
           <View>
@@ -218,11 +181,14 @@ export default function ChatsScreen() {
 
           <Pressable
             style={styles.newChatButton}
-            onPress={createTestConversation}
-            disabled={creating}
+            onPress={() =>
+              router.push('/find-user')
+            }
           >
-            <Text style={styles.newChatText}>
-              {creating ? '…' : '+'}
+            <Text
+              style={styles.newChatText}
+            >
+              +
             </Text>
           </Pressable>
         </View>
@@ -239,71 +205,127 @@ export default function ChatsScreen() {
           />
         ) : conversations.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>
+            <Text
+              style={styles.emptyTitle}
+            >
               No conversations yet
             </Text>
 
-            <Text style={styles.emptyText}>
-              Tap the + button to create our first database-backed test conversation.
+            <Text
+              style={styles.emptyText}
+            >
+              Tap the + button to find another Project Delivered user.
             </Text>
           </View>
         ) : (
-          conversations.map((conversation) => (
-            <Pressable
-              key={conversation.id}
-              style={styles.chat}
-              onPress={() =>
-                router.push({
-                  pathname: '/conversation',
-                  params: {
-                    conversationId: conversation.id,
-                  },
-                })
-              }
-            >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>
-                  {(conversation.title ?? 'C')
-                    .charAt(0)
-                    .toUpperCase()}
-                </Text>
-              </View>
-
-              <View style={styles.chatContent}>
-                <View style={styles.chatTopRow}>
-                  <Text style={styles.name}>
-                    {conversation.title ??
-                      'Conversation'}
-                  </Text>
-
-                  <Text style={styles.time}>
-                    {new Date(
-                      conversation.created_at
-                    ).toLocaleDateString()}
+          conversations.map(
+            (conversation) => (
+              <Pressable
+                key={conversation.id}
+                style={styles.chat}
+                onPress={() =>
+                  router.push({
+                    pathname:
+                      '/conversation',
+                    params: {
+                      conversationId:
+                        conversation.id,
+                    },
+                  })
+                }
+              >
+                <View
+                  style={styles.avatar}
+                >
+                  <Text
+                    style={
+                      styles.avatarText
+                    }
+                  >
+                    {(
+                      conversation.title ??
+                      'C'
+                    )
+                      .charAt(0)
+                      .toUpperCase()}
                   </Text>
                 </View>
 
-                <Text
-                  style={styles.preview}
-                  numberOfLines={1}
+                <View
+                  style={
+                    styles.chatContent
+                  }
                 >
-                  Supabase conversation
-                </Text>
-              </View>
-            </Pressable>
-          ))
+                  <View
+                    style={
+                      styles.chatTopRow
+                    }
+                  >
+                    <Text
+                      style={styles.name}
+                    >
+                      {conversation.title ??
+                        'Conversation'}
+                    </Text>
+
+                    <Text
+                      style={styles.time}
+                    >
+                      {new Date(
+                        conversation.created_at
+                      ).toLocaleDateString()}
+                    </Text>
+                  </View>
+
+                  <Text
+                    style={styles.preview}
+                    numberOfLines={1}
+                  >
+                    Open conversation
+                  </Text>
+                </View>
+              </Pressable>
+            )
+          )
         )}
 
-        <View style={styles.developmentSection}>
-          <Text style={styles.developmentLabel}>
+        <View
+          style={
+            styles.developmentSection
+          }
+        >
+          <Text
+            style={
+              styles.developmentLabel
+            }
+          >
             DEVELOPMENT
           </Text>
 
           <Pressable
-            style={styles.resetButton}
-            onPress={resetDevelopmentState}
+            style={styles.devButton}
+            onPress={signOut}
           >
-            <Text style={styles.resetButtonText}>
+            <Text
+              style={
+                styles.devButtonText
+              }
+            >
+              Sign Out
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={styles.devButton}
+            onPress={
+              resetDevelopmentState
+            }
+          >
+            <Text
+              style={
+                styles.devButtonText
+              }
+            >
               Reset Onboarding
             </Text>
           </Pressable>
@@ -459,7 +481,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  resetButton: {
+  devButton: {
     height: 48,
     borderRadius: 12,
     borderWidth: 1,
@@ -467,9 +489,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 10,
   },
 
-  resetButtonText: {
+  devButtonText: {
     fontSize: 15,
     fontWeight: '700',
     color: '#344054',
