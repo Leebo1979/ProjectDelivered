@@ -13,9 +13,14 @@ import {
 
 import { supabase } from '../lib/supabase';
 
-const ONBOARDING_KEY = 'project_delivered_onboarding_complete';
-const BIOMETRICS_KEY = 'project_delivered_biometrics_enabled';
-const PIN_STORAGE_KEY = 'project_delivered_pin';
+const ONBOARDING_KEY =
+  'project_delivered_onboarding_complete';
+
+const BIOMETRICS_KEY =
+  'project_delivered_biometrics_enabled';
+
+const PIN_STORAGE_KEY =
+  'project_delivered_pin';
 
 type ConversationRow = {
   id: string;
@@ -31,11 +36,15 @@ type ChatListItem = {
   latestMessage: string;
   latestMessageAt: string | null;
   isGroup: boolean;
+  unreadCount: number;
 };
 
 export default function ChatsScreen() {
-  const [chats, setChats] = useState<ChatListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [chats, setChats] =
+    useState<ChatListItem[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
 
   useFocusEffect(
     useCallback(() => {
@@ -60,11 +69,13 @@ export default function ChatsScreen() {
         return;
       }
 
-      const { data: memberships, error: membershipError } =
-        await supabase
-          .from('conversation_members')
-          .select('conversation_id')
-          .eq('user_id', user.id);
+      const {
+        data: memberships,
+        error: membershipError,
+      } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', user.id);
 
       if (membershipError) {
         Alert.alert(
@@ -76,10 +87,13 @@ export default function ChatsScreen() {
 
       const conversationIds =
         memberships?.map(
-          (item) => item.conversation_id
+          (item) =>
+            item.conversation_id
         ) ?? [];
 
-      if (conversationIds.length === 0) {
+      if (
+        conversationIds.length === 0
+      ) {
         setChats([]);
         return;
       }
@@ -92,7 +106,10 @@ export default function ChatsScreen() {
         .select(
           'id, title, is_group, created_at'
         )
-        .in('id', conversationIds);
+        .in(
+          'id',
+          conversationIds
+        );
 
       if (conversationError) {
         Alert.alert(
@@ -102,106 +119,249 @@ export default function ChatsScreen() {
         return;
       }
 
-      const chatItems = await Promise.all(
-        (conversations as ConversationRow[]).map(
-          async (conversation) => {
-            let displayName =
-              conversation.title ?? 'Conversation';
+      const chatItems =
+        await Promise.all(
+          (
+            conversations as ConversationRow[]
+          ).map(
+            async (
+              conversation
+            ) => {
+              let displayName =
+                conversation.title ??
+                'Conversation';
 
-            let username: string | null = null;
+              let username:
+                string | null =
+                null;
 
-            if (!conversation.is_group) {
-              const {
-                data: memberRows,
-                error: membersError,
-              } = await supabase
-                .from('conversation_members')
-                .select('user_id')
-                .eq(
-                  'conversation_id',
-                  conversation.id
-                );
-
-              if (!membersError) {
-                const otherMember =
-                  memberRows?.find(
-                    (member) =>
-                      member.user_id !== user.id
-                  );
-
-                if (otherMember) {
-                  const {
-                    data: otherProfile,
-                  } = await supabase
-                    .from('profiles')
+              if (
+                !conversation.is_group
+              ) {
+                const {
+                  data:
+                    memberRows,
+                  error:
+                    membersError,
+                } =
+                  await supabase
+                    .from(
+                      'conversation_members'
+                    )
                     .select(
-                      'display_name, username'
+                      'user_id'
                     )
                     .eq(
-                      'id',
-                      otherMember.user_id
-                    )
-                    .maybeSingle();
+                      'conversation_id',
+                      conversation.id
+                    );
 
-                  if (otherProfile) {
-                    displayName =
-                      otherProfile.display_name;
+                if (
+                  !membersError
+                ) {
+                  const otherMember =
+                    memberRows?.find(
+                      (
+                        member
+                      ) =>
+                        member.user_id !==
+                        user.id
+                    );
 
-                    username =
-                      otherProfile.username;
+                  if (
+                    otherMember
+                  ) {
+                    const {
+                      data:
+                        otherProfile,
+                    } =
+                      await supabase
+                        .from(
+                          'profiles'
+                        )
+                        .select(
+                          'display_name, username'
+                        )
+                        .eq(
+                          'id',
+                          otherMember.user_id
+                        )
+                        .maybeSingle();
+
+                    if (
+                      otherProfile
+                    ) {
+                      displayName =
+                        otherProfile.display_name;
+
+                      username =
+                        otherProfile.username;
+                    }
                   }
                 }
               }
+
+              const {
+                data:
+                  latestMessageRows,
+              } = await supabase
+                .from('messages')
+                .select(
+                  'id, body, created_at'
+                )
+                .eq(
+                  'conversation_id',
+                  conversation.id
+                )
+                .is(
+                  'deleted_at',
+                  null
+                )
+                .order(
+                  'created_at',
+                  {
+                    ascending:
+                      false,
+                  }
+                )
+                .limit(1);
+
+              const latestMessage =
+                latestMessageRows?.[0];
+
+              const {
+                data:
+                  incomingMessages,
+                error:
+                  incomingError,
+              } = await supabase
+                .from('messages')
+                .select('id')
+                .eq(
+                  'conversation_id',
+                  conversation.id
+                )
+                .neq(
+                  'sender_id',
+                  user.id
+                )
+                .is(
+                  'deleted_at',
+                  null
+                );
+
+              let unreadCount = 0;
+
+              if (
+                !incomingError &&
+                incomingMessages &&
+                incomingMessages.length >
+                  0
+              ) {
+                const incomingIds =
+                  incomingMessages.map(
+                    (
+                      item
+                    ) => item.id
+                  );
+
+                const {
+                  data:
+                    readRows,
+                  error:
+                    readError,
+                } = await supabase
+                  .from(
+                    'message_reads'
+                  )
+                  .select(
+                    'message_id'
+                  )
+                  .eq(
+                    'user_id',
+                    user.id
+                  )
+                  .in(
+                    'message_id',
+                    incomingIds
+                  );
+
+                if (!readError) {
+                  const readIds =
+                    new Set(
+                      (
+                        readRows ??
+                        []
+                      ).map(
+                        (
+                          item
+                        ) =>
+                          item.message_id
+                      )
+                    );
+
+                  unreadCount =
+                    incomingIds.filter(
+                      (
+                        id
+                      ) =>
+                        !readIds.has(
+                          id
+                        )
+                    ).length;
+                }
+              }
+
+              return {
+                id:
+                  conversation.id,
+
+                displayName,
+
+                username,
+
+                latestMessage:
+                  latestMessage?.body ??
+                  'No messages yet',
+
+                latestMessageAt:
+                  latestMessage?.created_at ??
+                  conversation.created_at,
+
+                isGroup:
+                  conversation.is_group,
+
+                unreadCount,
+              };
             }
+          )
+        );
 
-            const {
-              data: latestMessageRows,
-            } = await supabase
-              .from('messages')
-              .select('body, created_at')
-              .eq(
-                'conversation_id',
-                conversation.id
-              )
-              .is('deleted_at', null)
-              .order('created_at', {
-                ascending: false,
-              })
-              .limit(1);
+      chatItems.sort(
+        (a, b) => {
+          const aTime =
+            a.latestMessageAt
+              ? new Date(
+                  a.latestMessageAt
+                ).getTime()
+              : 0;
 
-            const latestMessage =
-              latestMessageRows?.[0];
+          const bTime =
+            b.latestMessageAt
+              ? new Date(
+                  b.latestMessageAt
+                ).getTime()
+              : 0;
 
-            return {
-              id: conversation.id,
-              displayName,
-              username,
-              latestMessage:
-                latestMessage?.body ??
-                'No messages yet',
-              latestMessageAt:
-                latestMessage?.created_at ??
-                conversation.created_at,
-              isGroup:
-                conversation.is_group,
-            };
-          }
-        )
+          return (
+            bTime - aTime
+          );
+        }
       );
 
-      chatItems.sort((a, b) => {
-        const aTime = a.latestMessageAt
-          ? new Date(a.latestMessageAt).getTime()
-          : 0;
-
-        const bTime = b.latestMessageAt
-          ? new Date(b.latestMessageAt).getTime()
-          : 0;
-
-        return bTime - aTime;
-      });
-
-      setChats(chatItems);
+      setChats(
+        chatItems
+      );
     } catch (error) {
       console.error(
         'Load chats error:',
@@ -217,55 +377,69 @@ export default function ChatsScreen() {
     }
   };
 
-  const showNewChatMenu = () => {
-    Alert.alert(
-      'New Conversation',
-      'What would you like to create?',
-      [
-        {
-          text: 'New Message',
-          onPress: () =>
-            router.push('/find-user'),
-        },
-        {
-          text: 'New Group',
-          onPress: () =>
-            router.push('/create-group'),
-        },
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-      ]
-    );
-  };
+  const showNewChatMenu =
+    () => {
+      Alert.alert(
+        'New Conversation',
+        'What would you like to create?',
+        [
+          {
+            text:
+              'New Message',
+            onPress: () =>
+              router.push(
+                '/find-user'
+              ),
+          },
+          {
+            text:
+              'New Group',
+            onPress: () =>
+              router.push(
+                '/create-group'
+              ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
 
-  const signOut = async () => {
-    try {
-      const { error } =
-        await supabase.auth.signOut();
+  const signOut =
+    async () => {
+      try {
+        const {
+          error,
+        } =
+          await supabase.auth.signOut();
 
-      if (error) {
+        if (error) {
+          Alert.alert(
+            'Unable to sign out',
+            error.message
+          );
+          return;
+        }
+
+        router.replace(
+          '/sign-up'
+        );
+      } catch (error) {
+        console.error(
+          'Sign out error:',
+          error
+        );
+
         Alert.alert(
           'Unable to sign out',
-          error.message
+          'Please try again.'
         );
-        return;
       }
-
-      router.replace('/sign-up');
-    } catch (error) {
-      console.error(
-        'Sign out error:',
-        error
-      );
-
-      Alert.alert(
-        'Unable to sign out',
-        'Please try again.'
-      );
-    }
-  };
+    };
 
   const resetDevelopmentState =
     async () => {
@@ -297,71 +471,128 @@ export default function ChatsScreen() {
     };
 
   const formatChatTime = (
-    timestamp: string | null
+    timestamp:
+      string | null
   ) => {
     if (!timestamp) {
       return '';
     }
 
-    const date = new Date(timestamp);
-    const now = new Date();
+    const date =
+      new Date(timestamp);
+
+    const now =
+      new Date();
 
     const sameDay =
-      date.getFullYear() === now.getFullYear() &&
-      date.getMonth() === now.getMonth() &&
-      date.getDate() === now.getDate();
+      date.getFullYear() ===
+        now.getFullYear() &&
+      date.getMonth() ===
+        now.getMonth() &&
+      date.getDate() ===
+        now.getDate();
 
     if (sameDay) {
-      return date.toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-      });
+      return date.toLocaleTimeString(
+        [],
+        {
+          hour: 'numeric',
+          minute: '2-digit',
+        }
+      );
     }
 
-    return date.toLocaleDateString([], {
-      month: 'short',
-      day: 'numeric',
-    });
+    return date.toLocaleDateString(
+      [],
+      {
+        month: 'short',
+        day: 'numeric',
+      }
+    );
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View style={styles.header}>
+    <SafeAreaView
+      style={
+        styles.safeArea
+      }
+    >
+      <View
+        style={
+          styles.container
+        }
+      >
+        <View
+          style={
+            styles.header
+          }
+        >
           <View>
-            <Text style={styles.eyebrow}>
+            <Text
+              style={
+                styles.eyebrow
+              }
+            >
               PROJECT DELIVERED
             </Text>
 
-            <Text style={styles.title}>
+            <Text
+              style={
+                styles.title
+              }
+            >
               Chats
             </Text>
           </View>
 
-          <View style={styles.headerActions}>
+          <View
+            style={
+              styles.headerActions
+            }
+          >
             <Pressable
-              style={styles.favouritesButton}
+              style={
+                styles.favouritesButton
+              }
               onPress={() =>
-                router.push('/favourites')
+                router.push(
+                  '/favourites'
+                )
               }
             >
-              <Text style={styles.favouritesText}>
+              <Text
+                style={
+                  styles.favouritesText
+                }
+              >
                 ★
               </Text>
             </Pressable>
 
             <Pressable
-              style={styles.newChatButton}
-              onPress={showNewChatMenu}
+              style={
+                styles.newChatButton
+              }
+              onPress={
+                showNewChatMenu
+              }
             >
-              <Text style={styles.newChatText}>
+              <Text
+                style={
+                  styles.newChatText
+                }
+              >
                 +
               </Text>
             </Pressable>
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>
+        <Text
+          style={
+            styles.sectionTitle
+          }
+        >
           RECENT
         </Text>
 
@@ -369,112 +600,226 @@ export default function ChatsScreen() {
           <ActivityIndicator
             size="large"
             color="#4169E1"
-            style={styles.loader}
+            style={
+              styles.loader
+            }
           />
-        ) : chats.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>
+        ) : chats.length ===
+          0 ? (
+          <View
+            style={
+              styles.emptyState
+            }
+          >
+            <Text
+              style={
+                styles.emptyTitle
+              }
+            >
               No conversations yet
             </Text>
 
-            <Text style={styles.emptyText}>
+            <Text
+              style={
+                styles.emptyText
+              }
+            >
               Tap the + button to start a message or create a group.
             </Text>
           </View>
         ) : (
-          chats.map((chat) => (
-            <Pressable
-              key={chat.id}
-              style={styles.chat}
-              onPress={() =>
-                router.push({
-                  pathname:
-                    '/conversation',
-                  params: {
-                    conversationId:
-                      chat.id,
-                  },
-                })
-              }
-            >
-              <View
-                style={[
-                  styles.avatar,
-                  chat.isGroup &&
-                    styles.groupAvatar,
-                ]}
+          chats.map(
+            (chat) => (
+              <Pressable
+                key={chat.id}
+                style={
+                  styles.chat
+                }
+                onPress={() =>
+                  router.push({
+                    pathname:
+                      '/conversation',
+                    params: {
+                      conversationId:
+                        chat.id,
+                    },
+                  })
+                }
               >
-                <Text style={styles.avatarText}>
-                  {chat.displayName
-                    .charAt(0)
-                    .toUpperCase()}
-                </Text>
-              </View>
-
-              <View style={styles.chatContent}>
-                <View style={styles.chatTopRow}>
-                  <View style={styles.nameRow}>
-                    <Text
-                      style={styles.name}
-                      numberOfLines={1}
-                    >
-                      {chat.displayName}
-                    </Text>
-
-                    {chat.isGroup && (
-                      <Text
-                        style={styles.groupLabel}
-                      >
-                        GROUP
-                      </Text>
-                    )}
-                  </View>
-
-                  <Text style={styles.time}>
-                    {formatChatTime(
-                      chat.latestMessageAt
-                    )}
+                <View
+                  style={[
+                    styles.avatar,
+                    chat.isGroup &&
+                      styles.groupAvatar,
+                  ]}
+                >
+                  <Text
+                    style={
+                      styles.avatarText
+                    }
+                  >
+                    {chat.displayName
+                      .charAt(0)
+                      .toUpperCase()}
                   </Text>
                 </View>
 
-                <Text
-                  style={styles.preview}
-                  numberOfLines={1}
+                <View
+                  style={
+                    styles.chatContent
+                  }
                 >
-                  {chat.latestMessage}
-                </Text>
+                  <View
+                    style={
+                      styles.chatTopRow
+                    }
+                  >
+                    <View
+                      style={
+                        styles.nameRow
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.name,
+                          chat.unreadCount >
+                            0 &&
+                            styles.unreadName,
+                        ]}
+                        numberOfLines={
+                          1
+                        }
+                      >
+                        {
+                          chat.displayName
+                        }
+                      </Text>
 
-                {chat.username && (
-                  <Text style={styles.username}>
-                    @{chat.username}
+                      {chat.isGroup && (
+                        <Text
+                          style={
+                            styles.groupLabel
+                          }
+                        >
+                          GROUP
+                        </Text>
+                      )}
+                    </View>
+
+                    <View
+                      style={
+                        styles.rightColumn
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.time,
+                          chat.unreadCount >
+                            0 &&
+                            styles.unreadTime,
+                        ]}
+                      >
+                        {formatChatTime(
+                          chat.latestMessageAt
+                        )}
+                      </Text>
+
+                      {chat.unreadCount >
+                        0 && (
+                        <View
+                          style={
+                            styles.unreadBadge
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.unreadBadgeText
+                            }
+                          >
+                            {chat.unreadCount >
+                            99
+                              ? '99+'
+                              : chat.unreadCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  <Text
+                    style={[
+                      styles.preview,
+                      chat.unreadCount >
+                        0 &&
+                        styles.unreadPreview,
+                    ]}
+                    numberOfLines={
+                      1
+                    }
+                  >
+                    {
+                      chat.latestMessage
+                    }
                   </Text>
-                )}
-              </View>
-            </Pressable>
-          ))
+
+                  {chat.username && (
+                    <Text
+                      style={
+                        styles.username
+                      }
+                    >
+                      @{chat.username}
+                    </Text>
+                  )}
+                </View>
+              </Pressable>
+            )
+          )
         )}
 
-        <View style={styles.developmentSection}>
-          <Text style={styles.developmentLabel}>
+        <View
+          style={
+            styles.developmentSection
+          }
+        >
+          <Text
+            style={
+              styles.developmentLabel
+            }
+          >
             DEVELOPMENT
           </Text>
 
           <Pressable
-            style={styles.devButton}
-            onPress={signOut}
+            style={
+              styles.devButton
+            }
+            onPress={
+              signOut
+            }
           >
-            <Text style={styles.devButtonText}>
+            <Text
+              style={
+                styles.devButtonText
+              }
+            >
               Sign Out
             </Text>
           </Pressable>
 
           <Pressable
-            style={styles.devButton}
+            style={
+              styles.devButton
+            }
             onPress={
               resetDevelopmentState
             }
           >
-            <Text style={styles.devButtonText}>
+            <Text
+              style={
+                styles.devButtonText
+              }
+            >
               Reset Onboarding
             </Text>
           </Pressable>
@@ -484,218 +829,310 @@ export default function ChatsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#F7F8FA',
-  },
+const styles =
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor:
+        '#F7F8FA',
+    },
 
-  container: {
-    flex: 1,
-    paddingHorizontal: 22,
-    paddingTop: 20,
-  },
+    container: {
+      flex: 1,
+      paddingHorizontal:
+        22,
+      paddingTop: 20,
+    },
 
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 34,
-  },
+    header: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      justifyContent:
+        'space-between',
+      marginBottom: 34,
+    },
 
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+    headerActions: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+    },
 
-  eyebrow: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.6,
-    color: '#4169E1',
-    marginBottom: 6,
-  },
+    eyebrow: {
+      fontSize: 12,
+      fontWeight: '700',
+      letterSpacing: 1.6,
+      color:
+        '#4169E1',
+      marginBottom: 6,
+    },
 
-  title: {
-    fontSize: 38,
-    fontWeight: '800',
-    color: '#101828',
-  },
+    title: {
+      fontSize: 38,
+      fontWeight: '800',
+      color:
+        '#101828',
+    },
 
-  favouritesButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#D0D5DD',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
+    favouritesButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+    },
 
-  favouritesText: {
-    fontSize: 22,
-    color: '#F79009',
-  },
+    favouritesText: {
+      fontSize: 22,
+      color:
+        '#F79009',
+    },
 
-  newChatButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#4169E1',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+    newChatButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#4169E1',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+    },
 
-  newChatText: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    lineHeight: 30,
-  },
+    newChatText: {
+      color:
+        '#FFFFFF',
+      fontSize: 28,
+      lineHeight: 30,
+    },
 
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    color: '#98A2B3',
-    marginBottom: 12,
-  },
+    sectionTitle: {
+      fontSize: 12,
+      fontWeight: '700',
+      letterSpacing: 1.4,
+      color:
+        '#98A2B3',
+      marginBottom: 12,
+    },
 
-  loader: {
-    marginTop: 40,
-  },
+    loader: {
+      marginTop: 40,
+    },
 
-  emptyState: {
-    paddingVertical: 40,
-    alignItems: 'center',
-  },
+    emptyState: {
+      paddingVertical: 40,
+      alignItems:
+        'center',
+    },
 
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#101828',
-    marginBottom: 8,
-  },
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color:
+        '#101828',
+      marginBottom: 8,
+    },
 
-  emptyText: {
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: 'center',
-    color: '#667085',
-  },
+    emptyText: {
+      fontSize: 15,
+      lineHeight: 22,
+      textAlign:
+        'center',
+      color:
+        '#667085',
+    },
 
-  chat: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EAECF0',
-  },
+    chat: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor:
+        '#EAECF0',
+    },
 
-  avatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#E8ECFB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
+    avatar: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor:
+        '#E8ECFB',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 14,
+    },
 
-  groupAvatar: {
-    backgroundColor: '#EAF7EF',
-  },
+    groupAvatar: {
+      backgroundColor:
+        '#EAF7EF',
+    },
 
-  avatarText: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#4169E1',
-  },
+    avatarText: {
+      fontSize: 20,
+      fontWeight: '700',
+      color:
+        '#4169E1',
+    },
 
-  chatContent: {
-    flex: 1,
-  },
+    chatContent: {
+      flex: 1,
+    },
 
-  chatTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
+    chatTopRow: {
+      flexDirection:
+        'row',
+      justifyContent:
+        'space-between',
+      alignItems:
+        'flex-start',
+      marginBottom: 4,
+    },
 
-  nameRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 10,
-  },
+    nameRow: {
+      flex: 1,
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      marginRight: 10,
+    },
 
-  name: {
-    flexShrink: 1,
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#101828',
-  },
+    name: {
+      flexShrink: 1,
+      fontSize: 17,
+      fontWeight: '700',
+      color:
+        '#101828',
+    },
 
-  groupLabel: {
-    marginLeft: 8,
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    color: '#027A48',
-    backgroundColor: '#ECFDF3',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 5,
-  },
+    unreadName: {
+      fontWeight: '800',
+    },
 
-  time: {
-    fontSize: 12,
-    color: '#98A2B3',
-  },
+    groupLabel: {
+      marginLeft: 8,
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      color:
+        '#027A48',
+      backgroundColor:
+        '#ECFDF3',
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
 
-  preview: {
-    fontSize: 15,
-    color: '#667085',
-  },
+    rightColumn: {
+      alignItems:
+        'flex-end',
+    },
 
-  username: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#98A2B3',
-  },
+    time: {
+      fontSize: 12,
+      color:
+        '#98A2B3',
+    },
 
-  developmentSection: {
-    marginTop: 'auto',
-    marginBottom: 30,
-    paddingTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#EAECF0',
-  },
+    unreadTime: {
+      color:
+        '#4169E1',
+      fontWeight: '700',
+    },
 
-  developmentLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    color: '#98A2B3',
-    marginBottom: 10,
-  },
+    unreadBadge: {
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor:
+        '#4169E1',
+      paddingHorizontal: 6,
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginTop: 6,
+    },
 
-  devButton: {
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D0D5DD',
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
+    unreadBadgeText: {
+      fontSize: 11,
+      fontWeight: '800',
+      color:
+        '#FFFFFF',
+    },
 
-  devButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#344054',
-  },
-});
+    preview: {
+      fontSize: 15,
+      color:
+        '#667085',
+    },
+
+    unreadPreview: {
+      color:
+        '#344054',
+      fontWeight: '600',
+    },
+
+    username: {
+      marginTop: 4,
+      fontSize: 12,
+      color:
+        '#98A2B3',
+    },
+
+    developmentSection: {
+      marginTop: 'auto',
+      marginBottom: 30,
+      paddingTop: 20,
+      borderTopWidth: 1,
+      borderTopColor:
+        '#EAECF0',
+    },
+
+    developmentLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 1.4,
+      color:
+        '#98A2B3',
+      marginBottom: 10,
+    },
+
+    devButton: {
+      height: 48,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      backgroundColor:
+        '#FFFFFF',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginBottom: 10,
+    },
+
+    devButtonText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color:
+        '#344054',
+    },
+  });
