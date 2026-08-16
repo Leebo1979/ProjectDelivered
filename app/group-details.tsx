@@ -1,4 +1,8 @@
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import {
+    router,
+    useFocusEffect,
+    useLocalSearchParams,
+} from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
     ActivityIndicator,
@@ -24,16 +28,24 @@ type Member = {
 };
 
 export default function GroupDetailsScreen() {
-  const { conversationId } = useLocalSearchParams<{
-    conversationId: string;
-  }>();
+  const { conversationId } =
+    useLocalSearchParams<{
+      conversationId: string;
+    }>();
 
-  const [groupName, setGroupName] = useState('Group');
-  const [members, setMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [groupName, setGroupName] =
+    useState('Group');
 
-  const [currentUserId, setCurrentUserId] =
-    useState<string | null>(null);
+  const [members, setMembers] =
+    useState<Member[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [
+    currentUserId,
+    setCurrentUserId,
+  ] = useState<string | null>(null);
 
   const [isOwner, setIsOwner] =
     useState(false);
@@ -44,157 +56,183 @@ export default function GroupDetailsScreen() {
     }, [conversationId])
   );
 
-  const loadGroupDetails = async () => {
-    try {
-      setLoading(true);
+  const loadGroupDetails =
+    async () => {
+      try {
+        setLoading(true);
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+        const {
+          data: { user },
+          error: userError,
+        } =
+          await supabase.auth.getUser();
 
-      if (userError || !user) {
-        Alert.alert(
-          'Not signed in',
-          'Please sign in again.'
+        if (
+          userError ||
+          !user
+        ) {
+          Alert.alert(
+            'Not signed in',
+            'Please sign in again.'
+          );
+          return;
+        }
+
+        setCurrentUserId(
+          user.id
         );
-        return;
-      }
 
-      setCurrentUserId(user.id);
+        const {
+          data: conversation,
+          error:
+            conversationError,
+        } = await supabase
+          .from('conversations')
+          .select(
+            'title, created_by, is_group'
+          )
+          .eq(
+            'id',
+            conversationId
+          )
+          .single();
 
-      const {
-        data: conversation,
-        error: conversationError,
-      } = await supabase
-        .from('conversations')
-        .select(
-          'title, created_by, is_group'
-        )
-        .eq('id', conversationId)
-        .single();
+        if (
+          conversationError ||
+          !conversation
+        ) {
+          Alert.alert(
+            'Unable to load group',
+            conversationError?.message ??
+              'Group not found.'
+          );
+          return;
+        }
 
-      if (
-        conversationError ||
-        !conversation
-      ) {
+        if (
+          !conversation.is_group
+        ) {
+          Alert.alert(
+            'Not a group',
+            'This conversation is not a group chat.'
+          );
+          return;
+        }
+
+        setGroupName(
+          conversation.title ??
+            'Group'
+        );
+
+        setIsOwner(
+          conversation.created_by ===
+            user.id
+        );
+
+        const {
+          data: memberRows,
+          error: membersError,
+        } = await supabase
+          .from(
+            'conversation_members'
+          )
+          .select(
+            'user_id, role'
+          )
+          .eq(
+            'conversation_id',
+            conversationId
+          );
+
+        if (membersError) {
+          Alert.alert(
+            'Unable to load members',
+            membersError.message
+          );
+          return;
+        }
+
+        const enrichedMembers =
+          await Promise.all(
+            (
+              memberRows ?? []
+            ).map(
+              async (
+                member
+              ) => {
+                const {
+                  data: profile,
+                } =
+                  await supabase
+                    .from(
+                      'profiles'
+                    )
+                    .select(
+                      'display_name, username'
+                    )
+                    .eq(
+                      'id',
+                      member.user_id
+                    )
+                    .maybeSingle();
+
+                return {
+                  ...member,
+                  profile,
+                };
+              }
+            )
+          );
+
+        enrichedMembers.sort(
+          (a, b) => {
+            if (
+              a.role ===
+              'owner'
+            ) {
+              return -1;
+            }
+
+            if (
+              b.role ===
+              'owner'
+            ) {
+              return 1;
+            }
+
+            const aName =
+              a.profile
+                ?.display_name ??
+              '';
+
+            const bName =
+              b.profile
+                ?.display_name ??
+              '';
+
+            return aName.localeCompare(
+              bName
+            );
+          }
+        );
+
+        setMembers(
+          enrichedMembers
+        );
+      } catch (error) {
+        console.error(
+          'Load group details error:',
+          error
+        );
+
         Alert.alert(
           'Unable to load group',
-          conversationError?.message ??
-            'Group not found.'
+          'Please try again.'
         );
-        return;
+      } finally {
+        setLoading(false);
       }
-
-      if (!conversation.is_group) {
-        Alert.alert(
-          'Not a group',
-          'This conversation is not a group chat.'
-        );
-        return;
-      }
-
-      setGroupName(
-        conversation.title ??
-          'Group'
-      );
-
-      setIsOwner(
-        conversation.created_by ===
-          user.id
-      );
-
-      const {
-        data: memberRows,
-        error: membersError,
-      } = await supabase
-        .from(
-          'conversation_members'
-        )
-        .select(
-          'user_id, role'
-        )
-        .eq(
-          'conversation_id',
-          conversationId
-        );
-
-      if (membersError) {
-        Alert.alert(
-          'Unable to load members',
-          membersError.message
-        );
-        return;
-      }
-
-      const enrichedMembers =
-        await Promise.all(
-          (memberRows ?? []).map(
-            async (member) => {
-              const {
-                data: profile,
-              } = await supabase
-                .from('profiles')
-                .select(
-                  'display_name, username'
-                )
-                .eq(
-                  'id',
-                  member.user_id
-                )
-                .maybeSingle();
-
-              return {
-                ...member,
-                profile,
-              };
-            }
-          )
-        );
-
-      enrichedMembers.sort(
-        (a, b) => {
-          if (a.role === 'owner') {
-            return -1;
-          }
-
-          if (b.role === 'owner') {
-            return 1;
-          }
-
-          const aName =
-            a.profile
-              ?.display_name ??
-            '';
-
-          const bName =
-            b.profile
-              ?.display_name ??
-            '';
-
-          return aName.localeCompare(
-            bName
-          );
-        }
-      );
-
-      setMembers(
-        enrichedMembers
-      );
-    } catch (error) {
-      console.error(
-        'Load group details error:',
-        error
-      );
-
-      Alert.alert(
-        'Unable to load group',
-        'Please try again.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
 
   const renameGroup = () => {
     if (!isOwner) {
@@ -205,7 +243,10 @@ export default function GroupDetailsScreen() {
       return;
     }
 
-    if (Platform.OS !== 'ios') {
+    if (
+      Platform.OS !==
+      'ios'
+    ) {
       Alert.alert(
         'Rename Group',
         'Group renaming will use an inline editor on non-iOS builds.'
@@ -237,7 +278,8 @@ export default function GroupDetailsScreen() {
               'conversations'
             )
             .update({
-              title: cleanName,
+              title:
+                cleanName,
             })
             .eq(
               'id',
@@ -261,134 +303,311 @@ export default function GroupDetailsScreen() {
     );
   };
 
-  const openAddMember = () => {
-    if (!isOwner) {
+  const openAddMember =
+    () => {
+      if (!isOwner) {
+        Alert.alert(
+          'Owner only',
+          'Only the group owner can add members.'
+        );
+        return;
+      }
+
+      router.push({
+        pathname:
+          '/find-user',
+        params: {
+          mode:
+            'add-to-group',
+          conversationId,
+        },
+      });
+    };
+
+  const removeMember =
+    async (
+      member: Member
+    ) => {
+      if (!isOwner) {
+        return;
+      }
+
+      if (
+        member.user_id ===
+        currentUserId
+      ) {
+        Alert.alert(
+          'Owner cannot be removed',
+          'Transfer ownership before leaving the group.'
+        );
+        return;
+      }
+
       Alert.alert(
-        'Owner only',
-        'Only the group owner can add members.'
+        'Remove Member',
+        `Remove ${
+          member.profile
+            ?.display_name ??
+          'this user'
+        } from the group?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Remove',
+            style:
+              'destructive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } =
+                  await supabase
+                    .from(
+                      'conversation_members'
+                    )
+                    .delete()
+                    .eq(
+                      'conversation_id',
+                      conversationId
+                    )
+                    .eq(
+                      'user_id',
+                      member.user_id
+                    );
+
+                if (
+                  error
+                ) {
+                  Alert.alert(
+                    'Unable to remove member',
+                    error.message
+                  );
+                  return;
+                }
+
+                await loadGroupDetails();
+              },
+          },
+        ]
       );
-      return;
-    }
+    };
 
-    router.push({
-      pathname: '/find-user',
-      params: {
-        mode: 'add-to-group',
-        conversationId,
-      },
-    });
-  };
+  const transferOwnership =
+    (
+      member: Member
+    ) => {
+      if (!isOwner) {
+        return;
+      }
 
-  const removeMember = async (
-    member: Member
-  ) => {
-    if (!isOwner) {
-      return;
-    }
+      if (
+        member.user_id ===
+        currentUserId
+      ) {
+        return;
+      }
 
-    if (
-      member.user_id ===
-      currentUserId
-    ) {
       Alert.alert(
-        'Owner cannot be removed',
-        'Transfer ownership before removing yourself.'
-      );
-      return;
-    }
+        'Transfer Ownership',
+        `Make ${
+          member.profile
+            ?.display_name ??
+          'this member'
+        } the owner of ${groupName}?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Transfer',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } =
+                  await supabase.rpc(
+                    'transfer_group_ownership',
+                    {
+                      target_conversation_id:
+                        conversationId,
+                      new_owner_id:
+                        member.user_id,
+                    }
+                  );
 
-    Alert.alert(
-      'Remove Member',
-      `Remove ${
+                if (
+                  error
+                ) {
+                  Alert.alert(
+                    'Unable to transfer ownership',
+                    error.message
+                  );
+                  return;
+                }
+
+                Alert.alert(
+                  'Ownership transferred',
+                  `${
+                    member.profile
+                      ?.display_name ??
+                    'The member'
+                  } is now the group owner.`
+                );
+
+                await loadGroupDetails();
+              },
+          },
+        ]
+      );
+    };
+
+  const showMemberActions =
+    (
+      member: Member
+    ) => {
+      if (!isOwner) {
+        return;
+      }
+
+      if (
+        member.user_id ===
+        currentUserId
+      ) {
+        return;
+      }
+
+      Alert.alert(
         member.profile
           ?.display_name ??
-        'this user'
-      } from the group?`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            const {
-              error,
-            } = await supabase
-              .from(
-                'conversation_members'
-              )
-              .delete()
-              .eq(
-                'conversation_id',
-                conversationId
-              )
-              .eq(
-                'user_id',
-                member.user_id
-              );
-
-            if (error) {
-              Alert.alert(
-                'Unable to remove member',
-                error.message
-              );
-              return;
-            }
-
-            await loadGroupDetails();
+          'Member',
+        `@${
+          member.profile
+            ?.username ??
+          'unknown'
+        }`,
+        [
+          {
+            text:
+              'Transfer Ownership',
+            onPress: () =>
+              transferOwnership(
+                member
+              ),
           },
-        },
-      ]
-    );
-  };
+          {
+            text:
+              'Remove from Group',
+            style:
+              'destructive',
+            onPress: () =>
+              removeMember(
+                member
+              ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
 
-  const showMemberActions = (
-    member: Member
-  ) => {
-    if (!isOwner) {
-      return;
-    }
+  const leaveGroup =
+    () => {
+      if (
+        !currentUserId
+      ) {
+        return;
+      }
 
-    if (
-      member.user_id ===
-      currentUserId
-    ) {
-      return;
-    }
+      if (isOwner) {
+        Alert.alert(
+          'Transfer ownership first',
+          'You are the group owner. Transfer ownership to another member before leaving.'
+        );
+        return;
+      }
 
-    Alert.alert(
-      member.profile
-        ?.display_name ??
-        'Member',
-      `@${member.profile?.username ?? 'unknown'}`,
-      [
-        {
-          text: 'Remove from Group',
-          style: 'destructive',
-          onPress: () =>
-            removeMember(
-              member
-            ),
-        },
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-      ]
-    );
-  };
+      Alert.alert(
+        'Leave Group',
+        `Leave ${groupName}?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Leave',
+            style:
+              'destructive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } =
+                  await supabase
+                    .from(
+                      'conversation_members'
+                    )
+                    .delete()
+                    .eq(
+                      'conversation_id',
+                      conversationId
+                    )
+                    .eq(
+                      'user_id',
+                      currentUserId
+                    );
+
+                if (
+                  error
+                ) {
+                  Alert.alert(
+                    'Unable to leave group',
+                    error.message
+                  );
+                  return;
+                }
+
+                router.replace(
+                  '/chats'
+                );
+              },
+          },
+        ]
+      );
+    };
 
   return (
     <SafeAreaView
-      style={styles.safeArea}
+      style={
+        styles.safeArea
+      }
     >
       <View
-        style={styles.container}
+        style={
+          styles.container
+        }
       >
         <View
-          style={styles.header}
+          style={
+            styles.header
+          }
         >
           <Pressable
             style={
@@ -413,8 +632,12 @@ export default function GroupDetailsScreen() {
             }
           >
             <Text
-              style={styles.title}
-              numberOfLines={1}
+              style={
+                styles.title
+              }
+              numberOfLines={
+                1
+              }
             >
               {groupName}
             </Text>
@@ -425,7 +648,8 @@ export default function GroupDetailsScreen() {
               }
             >
               {members.length}{' '}
-              {members.length === 1
+              {members.length ===
+              1
                 ? 'member'
                 : 'members'}
             </Text>
@@ -456,9 +680,10 @@ export default function GroupDetailsScreen() {
             </Pressable>
 
             <Pressable
-              style={
-                styles.actionButton
-              }
+              style={[
+                styles.actionButton,
+                styles.lastActionButton,
+              ]}
               onPress={
                 openAddMember
               }
@@ -502,14 +727,18 @@ export default function GroupDetailsScreen() {
           <ActivityIndicator
             size="large"
             color="#4169E1"
-            style={styles.loader}
+            style={
+              styles.loader
+            }
           />
         ) : (
           <FlatList
             data={members}
             keyExtractor={(
               item
-            ) => item.user_id}
+            ) =>
+              item.user_id
+            }
             contentContainerStyle={
               styles.memberList
             }
@@ -619,9 +848,26 @@ export default function GroupDetailsScreen() {
               styles.helpText
             }
           >
-            Long-press a member to remove them from the group.
+            Long-press another member to transfer ownership or remove them.
           </Text>
         )}
+
+        <Pressable
+          style={
+            styles.leaveButton
+          }
+          onPress={
+            leaveGroup
+          }
+        >
+          <Text
+            style={
+              styles.leaveButtonText
+            }
+          >
+            Leave Group
+          </Text>
+        </Pressable>
       </View>
     </SafeAreaView>
   );
@@ -637,13 +883,16 @@ const styles =
 
     container: {
       flex: 1,
-      paddingHorizontal: 22,
+      paddingHorizontal:
+        22,
       paddingTop: 18,
     },
 
     header: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
       marginBottom: 24,
     },
 
@@ -655,7 +904,8 @@ const styles =
     backText: {
       fontSize: 38,
       lineHeight: 40,
-      color: '#4169E1',
+      color:
+        '#4169E1',
     },
 
     headerText: {
@@ -665,17 +915,20 @@ const styles =
     title: {
       fontSize: 30,
       fontWeight: '800',
-      color: '#101828',
+      color:
+        '#101828',
     },
 
     subtitle: {
       marginTop: 3,
       fontSize: 13,
-      color: '#667085',
+      color:
+        '#667085',
     },
 
     actions: {
-      flexDirection: 'row',
+      flexDirection:
+        'row',
       marginBottom: 24,
     },
 
@@ -685,38 +938,48 @@ const styles =
       borderRadius: 12,
       backgroundColor:
         '#4169E1',
-      alignItems: 'center',
+      alignItems:
+        'center',
       justifyContent:
         'center',
       marginRight: 10,
     },
 
+    lastActionButton: {
+      marginRight: 0,
+    },
+
     actionText: {
       fontSize: 15,
       fontWeight: '700',
-      color: '#FFFFFF',
+      color:
+        '#FFFFFF',
     },
 
     memberNotice: {
       backgroundColor:
         '#F2F4F7',
       borderRadius: 12,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      paddingHorizontal:
+        14,
+      paddingVertical:
+        12,
       marginBottom: 22,
     },
 
     memberNoticeText: {
       fontSize: 13,
       lineHeight: 19,
-      color: '#667085',
+      color:
+        '#667085',
     },
 
     sectionTitle: {
       fontSize: 12,
       fontWeight: '700',
       letterSpacing: 1.4,
-      color: '#98A2B3',
+      color:
+        '#98A2B3',
       marginBottom: 10,
     },
 
@@ -729,10 +992,14 @@ const styles =
     },
 
     memberRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 13,
-      borderBottomWidth: 1,
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      paddingVertical:
+        13,
+      borderBottomWidth:
+        1,
       borderBottomColor:
         '#EAECF0',
     },
@@ -743,7 +1010,8 @@ const styles =
       borderRadius: 24,
       backgroundColor:
         '#E8ECFB',
-      alignItems: 'center',
+      alignItems:
+        'center',
       justifyContent:
         'center',
       marginRight: 13,
@@ -752,7 +1020,8 @@ const styles =
     avatarText: {
       fontSize: 18,
       fontWeight: '700',
-      color: '#4169E1',
+      color:
+        '#4169E1',
     },
 
     memberInfo: {
@@ -760,15 +1029,18 @@ const styles =
     },
 
     memberNameRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
     },
 
     memberName: {
       flexShrink: 1,
       fontSize: 16,
       fontWeight: '700',
-      color: '#101828',
+      color:
+        '#101828',
     },
 
     youLabel: {
@@ -776,10 +1048,12 @@ const styles =
       fontSize: 9,
       fontWeight: '800',
       letterSpacing: 0.6,
-      color: '#4169E1',
+      color:
+        '#4169E1',
       backgroundColor:
         '#EEF2FF',
-      paddingHorizontal: 5,
+      paddingHorizontal:
+        5,
       paddingVertical: 2,
       borderRadius: 4,
     },
@@ -787,21 +1061,48 @@ const styles =
     username: {
       marginTop: 3,
       fontSize: 13,
-      color: '#667085',
+      color:
+        '#667085',
     },
 
     role: {
       fontSize: 10,
       fontWeight: '800',
       letterSpacing: 0.7,
-      color: '#4169E1',
+      color:
+        '#4169E1',
     },
 
     helpText: {
       marginTop: 14,
-      marginBottom: 20,
+      marginBottom: 12,
       fontSize: 12,
-      color: '#98A2B3',
-      textAlign: 'center',
+      color:
+        '#98A2B3',
+      textAlign:
+        'center',
+    },
+
+    leaveButton: {
+      height: 48,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor:
+        '#FDA29B',
+      backgroundColor:
+        '#FFFFFF',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginTop: 'auto',
+      marginBottom: 20,
+    },
+
+    leaveButtonText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color:
+        '#D92D20',
     },
   });
