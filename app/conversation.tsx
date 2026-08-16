@@ -1808,6 +1808,21 @@ export default function ConversationScreen() {
         },
         {
           text:
+            'Forward',
+          onPress: () =>
+            router.push({
+              pathname:
+                '/forward-message',
+              params: {
+                messageId:
+                  item.id,
+                sourceConversationId:
+                  conversationId,
+              },
+            }),
+        },
+        {
+          text:
             favouriteMap[
               item.id
             ]
