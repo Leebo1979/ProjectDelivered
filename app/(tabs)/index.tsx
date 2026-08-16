@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 export default function HomeScreen() {
@@ -11,7 +12,10 @@ export default function HomeScreen() {
         Conversations that matter, organised and easy to find.
       </Text>
 
-      <Pressable style={styles.button}>
+      <Pressable
+        style={styles.button}
+        onPress={() => router.push('/create-profile')}
+      >
         <Text style={styles.buttonText}>Get Started</Text>
       </Pressable>
     </View>
