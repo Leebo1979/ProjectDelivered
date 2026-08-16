@@ -22,6 +22,11 @@ type Message = {
   created_at: string;
 };
 
+type OtherUser = {
+  display_name: string;
+  username: string;
+};
+
 export default function ConversationScreen() {
   const { conversationId } = useLocalSearchParams<{
     conversationId: string;
@@ -33,6 +38,12 @@ export default function ConversationScreen() {
   const [sending, setSending] = useState(false);
   const [currentUserId, setCurrentUserId] =
     useState<string | null>(null);
+
+  const [otherUser, setOtherUser] =
+    useState<OtherUser | null>(null);
+
+  const [conversationTitle, setConversationTitle] =
+    useState('Conversation');
 
   const listRef = useRef<FlatList<Message>>(null);
 
@@ -57,21 +68,24 @@ export default function ConversationScreen() {
           const newMessage = payload.new as Message;
 
           setMessages((currentMessages) => {
-            const alreadyExists = currentMessages.some(
-              (item) => item.id === newMessage.id
-            );
+            const alreadyExists =
+              currentMessages.some(
+                (item) =>
+                  item.id === newMessage.id
+              );
 
             if (alreadyExists) {
               return currentMessages;
             }
 
-            return [...currentMessages, newMessage];
+            return [
+              ...currentMessages,
+              newMessage,
+            ];
           });
         }
       )
-      .subscribe((status) => {
-        console.log('Realtime status:', status);
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
@@ -111,6 +125,92 @@ export default function ConversationScreen() {
 
       setCurrentUserId(user.id);
 
+      const {
+        data: conversation,
+        error: conversationError,
+      } = await supabase
+        .from('conversations')
+        .select(
+          'id, title, is_group'
+        )
+        .eq('id', conversationId)
+        .single();
+
+      if (conversationError) {
+        console.error(
+          'Conversation load error:',
+          conversationError
+        );
+      }
+
+      if (conversation) {
+        if (conversation.is_group) {
+          setConversationTitle(
+            conversation.title ??
+              'Group Conversation'
+          );
+        } else {
+          const {
+            data: members,
+            error: membersError,
+          } = await supabase
+            .from('conversation_members')
+            .select('user_id')
+            .eq(
+              'conversation_id',
+              conversationId
+            );
+
+          if (membersError) {
+            console.error(
+              'Members load error:',
+              membersError
+            );
+          } else {
+            const otherMember =
+              members?.find(
+                (member) =>
+                  member.user_id !== user.id
+              );
+
+            if (otherMember) {
+              const {
+                data: profile,
+                error: profileError,
+              } = await supabase
+                .from('profiles')
+                .select(
+                  'display_name, username'
+                )
+                .eq(
+                  'id',
+                  otherMember.user_id
+                )
+                .maybeSingle();
+
+              if (profileError) {
+                console.error(
+                  'Profile load error:',
+                  profileError
+                );
+              }
+
+              if (profile) {
+                setOtherUser(profile);
+                setConversationTitle(
+                  profile.display_name
+                );
+              }
+            } else {
+              setConversationTitle(
+                conversation.title ??
+                  'Conversation'
+              );
+            }
+          }
+        }
+      }
+
       const { data, error } = await supabase
         .from('messages')
         .select(
@@ -145,7 +245,8 @@ export default function ConversationScreen() {
   };
 
   const sendMessage = async () => {
-    const trimmedMessage = message.trim();
+    const trimmedMessage =
+      message.trim();
 
     if (
       !trimmedMessage ||
@@ -162,7 +263,8 @@ export default function ConversationScreen() {
       const { data, error } = await supabase
         .from('messages')
         .insert({
-          conversation_id: conversationId,
+          conversation_id:
+            conversationId,
           sender_id: currentUserId,
           body: trimmedMessage,
         })
@@ -179,21 +281,24 @@ export default function ConversationScreen() {
         return;
       }
 
-      // Add immediately on this device.
-      // The realtime listener also receives it,
-      // but our duplicate check prevents two copies.
-      setMessages((currentMessages) => {
-        const alreadyExists =
-          currentMessages.some(
-            (item) => item.id === data.id
-          );
+      setMessages(
+        (currentMessages) => {
+          const alreadyExists =
+            currentMessages.some(
+              (item) =>
+                item.id === data.id
+            );
 
-        if (alreadyExists) {
-          return currentMessages;
+          if (alreadyExists) {
+            return currentMessages;
+          }
+
+          return [
+            ...currentMessages,
+            data,
+          ];
         }
-
-        return [...currentMessages, data];
-      });
+      );
 
       setMessage('');
     } catch (error) {
@@ -218,7 +323,9 @@ export default function ConversationScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={styles.safeArea}
+    >
       <KeyboardAvoidingView
         style={styles.screen}
         behavior={
@@ -232,31 +339,43 @@ export default function ConversationScreen() {
             style={styles.backButton}
             onPress={() => router.back()}
           >
-            <Text style={styles.backText}>
+            <Text
+              style={styles.backText}
+            >
               ‹
             </Text>
           </Pressable>
 
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              T
+            <Text
+              style={styles.avatarText}
+            >
+              {conversationTitle
+                .charAt(0)
+                .toUpperCase()}
             </Text>
           </View>
 
-          <View style={styles.headerText}>
+          <View
+            style={styles.headerText}
+          >
             <Text style={styles.name}>
-              Test Conversation
+              {conversationTitle}
             </Text>
 
             <Text style={styles.status}>
-              Live
+              {otherUser
+                ? `@${otherUser.username}`
+                : 'Live'}
             </Text>
           </View>
         </View>
 
         {loading ? (
           <View
-            style={styles.loaderContainer}
+            style={
+              styles.loaderContainer
+            }
           >
             <ActivityIndicator
               size="large"
@@ -347,7 +466,8 @@ export default function ConversationScreen() {
 
           <Pressable
             disabled={
-              !message.trim() || sending
+              !message.trim() ||
+              sending
             }
             style={[
               styles.sendButton,
@@ -426,7 +546,7 @@ const styles = StyleSheet.create({
 
   status: {
     fontSize: 12,
-    color: '#12B76A',
+    color: '#667085',
     marginTop: 2,
   },
 
