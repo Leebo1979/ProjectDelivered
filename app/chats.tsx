@@ -1,6 +1,6 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,22 +17,33 @@ const ONBOARDING_KEY = 'project_delivered_onboarding_complete';
 const BIOMETRICS_KEY = 'project_delivered_biometrics_enabled';
 const PIN_STORAGE_KEY = 'project_delivered_pin';
 
-type Conversation = {
+type ConversationRow = {
   id: string;
   title: string | null;
   is_group: boolean;
   created_at: string;
 };
 
+type ChatListItem = {
+  id: string;
+  displayName: string;
+  username: string | null;
+  latestMessage: string;
+  latestMessageAt: string | null;
+  isGroup: boolean;
+};
+
 export default function ChatsScreen() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [chats, setChats] = useState<ChatListItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadConversations();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadChats();
+    }, [])
+  );
 
-  const loadConversations = async () => {
+  const loadChats = async () => {
     try {
       setLoading(true);
 
@@ -69,32 +80,129 @@ export default function ChatsScreen() {
         ) ?? [];
 
       if (conversationIds.length === 0) {
-        setConversations([]);
+        setChats([]);
         return;
       }
 
-      const { data, error } = await supabase
-        .from('conversations')
-        .select(
-          'id, title, is_group, created_at'
-        )
-        .in('id', conversationIds)
-        .order('created_at', {
-          ascending: false,
-        });
+      const { data: conversations, error: conversationError } =
+        await supabase
+          .from('conversations')
+          .select(
+            'id, title, is_group, created_at'
+          )
+          .in('id', conversationIds);
 
-      if (error) {
+      if (conversationError) {
         Alert.alert(
           'Unable to load chats',
-          error.message
+          conversationError.message
         );
         return;
       }
 
-      setConversations(data ?? []);
+      const chatItems = await Promise.all(
+        (conversations as ConversationRow[]).map(
+          async (conversation) => {
+            let displayName =
+              conversation.title ?? 'Conversation';
+
+            let username: string | null = null;
+
+            if (!conversation.is_group) {
+              const {
+                data: memberRows,
+                error: membersError,
+              } = await supabase
+                .from('conversation_members')
+                .select('user_id')
+                .eq(
+                  'conversation_id',
+                  conversation.id
+                );
+
+              if (!membersError) {
+                const otherMember =
+                  memberRows?.find(
+                    (member) =>
+                      member.user_id !== user.id
+                  );
+
+                if (otherMember) {
+                  const {
+                    data: otherProfile,
+                  } = await supabase
+                    .from('profiles')
+                    .select(
+                      'display_name, username'
+                    )
+                    .eq(
+                      'id',
+                      otherMember.user_id
+                    )
+                    .maybeSingle();
+
+                  if (otherProfile) {
+                    displayName =
+                      otherProfile.display_name;
+
+                    username =
+                      otherProfile.username;
+                  }
+                }
+              }
+            }
+
+            const {
+              data: latestMessageRows,
+            } = await supabase
+              .from('messages')
+              .select('body, created_at')
+              .eq(
+                'conversation_id',
+                conversation.id
+              )
+              .is('deleted_at', null)
+              .order('created_at', {
+                ascending: false,
+              })
+              .limit(1);
+
+            const latestMessage =
+              latestMessageRows?.[0];
+
+            return {
+              id: conversation.id,
+              displayName,
+              username,
+              latestMessage:
+                latestMessage?.body ??
+                'No messages yet',
+              latestMessageAt:
+                latestMessage?.created_at ??
+                conversation.created_at,
+              isGroup:
+                conversation.is_group,
+            };
+          }
+        )
+      );
+
+      chatItems.sort((a, b) => {
+        const aTime = a.latestMessageAt
+          ? new Date(a.latestMessageAt).getTime()
+          : 0;
+
+        const bTime = b.latestMessageAt
+          ? new Date(b.latestMessageAt).getTime()
+          : 0;
+
+        return bTime - aTime;
+      });
+
+      setChats(chatItems);
     } catch (error) {
       console.error(
-        'Load conversations error:',
+        'Load chats error:',
         error
       );
 
@@ -163,6 +271,37 @@ export default function ChatsScreen() {
       }
     };
 
+  const formatChatTime = (
+    timestamp: string | null
+  ) => {
+    if (!timestamp) {
+      return '';
+    }
+
+    const date = new Date(timestamp);
+    const now = new Date();
+
+    const sameDay =
+      date.getFullYear() ===
+        now.getFullYear() &&
+      date.getMonth() ===
+        now.getMonth() &&
+      date.getDate() ===
+        now.getDate();
+
+    if (sameDay) {
+      return date.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+
+    return date.toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric',
+    });
+  };
+
   return (
     <SafeAreaView
       style={styles.safeArea}
@@ -203,7 +342,7 @@ export default function ChatsScreen() {
             color="#4169E1"
             style={styles.loader}
           />
-        ) : conversations.length === 0 ? (
+        ) : chats.length === 0 ? (
           <View style={styles.emptyState}>
             <Text
               style={styles.emptyTitle}
@@ -218,75 +357,82 @@ export default function ChatsScreen() {
             </Text>
           </View>
         ) : (
-          conversations.map(
-            (conversation) => (
-              <Pressable
-                key={conversation.id}
-                style={styles.chat}
-                onPress={() =>
-                  router.push({
-                    pathname:
-                      '/conversation',
-                    params: {
-                      conversationId:
-                        conversation.id,
-                    },
-                  })
+          chats.map((chat) => (
+            <Pressable
+              key={chat.id}
+              style={styles.chat}
+              onPress={() =>
+                router.push({
+                  pathname:
+                    '/conversation',
+                  params: {
+                    conversationId:
+                      chat.id,
+                  },
+                })
+              }
+            >
+              <View style={styles.avatar}>
+                <Text
+                  style={styles.avatarText}
+                >
+                  {chat.displayName
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
+              </View>
+
+              <View
+                style={
+                  styles.chatContent
                 }
               >
                 <View
-                  style={styles.avatar}
+                  style={
+                    styles.chatTopRow
+                  }
                 >
                   <Text
-                    style={
-                      styles.avatarText
-                    }
+                    style={styles.name}
+                    numberOfLines={1}
                   >
-                    {(
-                      conversation.title ??
-                      'C'
-                    )
-                      .charAt(0)
-                      .toUpperCase()}
+                    {chat.displayName}
+                  </Text>
+
+                  <Text
+                    style={styles.time}
+                  >
+                    {formatChatTime(
+                      chat.latestMessageAt
+                    )}
                   </Text>
                 </View>
 
                 <View
                   style={
-                    styles.chatContent
+                    styles.previewRow
                   }
                 >
-                  <View
-                    style={
-                      styles.chatTopRow
-                    }
-                  >
-                    <Text
-                      style={styles.name}
-                    >
-                      {conversation.title ??
-                        'Conversation'}
-                    </Text>
-
-                    <Text
-                      style={styles.time}
-                    >
-                      {new Date(
-                        conversation.created_at
-                      ).toLocaleDateString()}
-                    </Text>
-                  </View>
-
                   <Text
                     style={styles.preview}
                     numberOfLines={1}
                   >
-                    Open conversation
+                    {chat.latestMessage}
                   </Text>
                 </View>
-              </Pressable>
-            )
-          )
+
+                {chat.username && (
+                  <Text
+                    style={
+                      styles.username
+                    }
+                  >
+                    @{chat.username}
+                  </Text>
+                )}
+              </View>
+            </Pressable>
+          ))
         )}
 
         <View
@@ -446,10 +592,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 5,
+    marginBottom: 4,
   },
 
   name: {
+    flex: 1,
+    marginRight: 10,
     fontSize: 17,
     fontWeight: '700',
     color: '#101828',
@@ -460,9 +608,21 @@ const styles = StyleSheet.create({
     color: '#98A2B3',
   },
 
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
   preview: {
+    flex: 1,
     fontSize: 15,
     color: '#667085',
+  },
+
+  username: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#98A2B3',
   },
 
   developmentSection: {
