@@ -1,68 +1,110 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useState } from 'react';
 import {
-    FlatList,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
+
+import { supabase } from '../lib/supabase';
 
 type Message = {
   id: string;
-  text: string;
-  sender: 'me' | 'alex';
-  sentAt: Date;
+  body: string;
+  sender_id: string;
+  created_at: string;
 };
 
-const initialMessages: Message[] = [
-  {
-    id: '1',
-    text: 'Welcome to Project Delivered 👋',
-    sender: 'alex',
-    sentAt: new Date(),
-  },
-  {
-    id: '2',
-    text: 'Great to be here.',
-    sender: 'me',
-    sentAt: new Date(),
-  },
-];
-
 export default function ConversationScreen() {
-  const [message, setMessage] = useState('');
-  const [messages, setMessages] =
-    useState<Message[]>(initialMessages);
+  const { conversationId } = useLocalSearchParams<{
+    conversationId: string;
+  }>();
 
-  const sendMessage = () => {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadConversation();
+  }, [conversationId]);
+
+  const loadConversation = async () => {
+    try {
+      setLoading(true);
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        console.error('User load error:', userError);
+        return;
+      }
+
+      setCurrentUserId(user.id);
+
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id, body, sender_id, created_at')
+        .eq('conversation_id', conversationId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Message load error:', error);
+        return;
+      }
+
+      setMessages(data ?? []);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendMessage = async () => {
     const trimmedMessage = message.trim();
 
-    if (!trimmedMessage) {
+    if (!trimmedMessage || !currentUserId || !conversationId) {
       return;
     }
 
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      text: trimmedMessage,
-      sender: 'me',
-      sentAt: new Date(),
-    };
+    try {
+      setSending(true);
 
-    setMessages((currentMessages) => [
-      ...currentMessages,
-      newMessage,
-    ]);
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: conversationId,
+          sender_id: currentUserId,
+          body: trimmedMessage,
+        })
+        .select('id, body, sender_id, created_at')
+        .single();
 
-    setMessage('');
+      if (error || !data) {
+        console.error('Send message error:', error);
+        return;
+      }
+
+      setMessages((current) => [...current, data]);
+      setMessage('');
+    } finally {
+      setSending(false);
+    }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], {
+  const formatTime = (timestamp: string) => {
+    return new Date(timestamp).toLocaleTimeString([], {
       hour: 'numeric',
       minute: '2-digit',
     });
@@ -83,66 +125,74 @@ export default function ConversationScreen() {
           </Pressable>
 
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>A</Text>
+            <Text style={styles.avatarText}>T</Text>
           </View>
 
           <View style={styles.headerText}>
-            <Text style={styles.name}>Alex</Text>
-            <Text style={styles.status}>
-              Project Delivered
-            </Text>
+            <Text style={styles.name}>Test Conversation</Text>
+            <Text style={styles.status}>Project Delivered</Text>
           </View>
         </View>
 
-        <FlatList
-          data={messages}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.messageList}
-          renderItem={({ item }) => {
-            const sentByMe = item.sender === 'me';
+        {loading ? (
+          <View style={styles.loaderContainer}>
+            <ActivityIndicator
+              size="large"
+              color="#4169E1"
+            />
+          </View>
+        ) : (
+          <FlatList
+            data={messages}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.messageList}
+            renderItem={({ item }) => {
+              const sentByMe =
+                item.sender_id === currentUserId;
 
-            return (
-              <View
-                style={
-                  sentByMe
-                    ? styles.sentRow
-                    : styles.receivedRow
-                }
-              >
+              return (
                 <View
-                  style={[
-                    styles.messageGroup,
-                    sentByMe &&
-                      styles.messageGroupSent,
-                  ]}
+                  style={
+                    sentByMe
+                      ? styles.sentRow
+                      : styles.receivedRow
+                  }
                 >
                   <View
-                    style={
-                      sentByMe
-                        ? styles.sentBubble
-                        : styles.receivedBubble
-                    }
+                    style={[
+                      styles.messageGroup,
+                      sentByMe &&
+                        styles.messageGroupSent,
+                    ]}
                   >
-                    <Text
+                    <View
                       style={
                         sentByMe
-                          ? styles.sentText
-                          : styles.receivedText
+                          ? styles.sentBubble
+                          : styles.receivedBubble
                       }
                     >
-                      {item.text}
+                      <Text
+                        style={
+                          sentByMe
+                            ? styles.sentText
+                            : styles.receivedText
+                        }
+                      >
+                        {item.body}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.timestamp}>
+                      {sentByMe ? 'Sent ' : ''}
+                      {formatTime(item.created_at)}
                     </Text>
                   </View>
-
-                  <Text style={styles.timestamp}>
-                    {sentByMe ? 'Sent ' : ''}
-                    {formatTime(item.sentAt)}
-                  </Text>
                 </View>
-              </View>
-            );
-          }}
-        />
+              );
+            }}
+          />
+        )}
 
         <View style={styles.composer}>
           <TextInput
@@ -155,15 +205,17 @@ export default function ConversationScreen() {
           />
 
           <Pressable
-            disabled={!message.trim()}
+            disabled={!message.trim() || sending}
             style={[
               styles.sendButton,
-              !message.trim() &&
+              (!message.trim() || sending) &&
                 styles.sendButtonDisabled,
             ]}
             onPress={sendMessage}
           >
-            <Text style={styles.sendText}>↑</Text>
+            <Text style={styles.sendText}>
+              {sending ? '…' : '↑'}
+            </Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -232,6 +284,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#667085',
     marginTop: 2,
+  },
+
+  loaderContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   messageList: {
