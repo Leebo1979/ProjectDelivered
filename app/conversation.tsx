@@ -2241,21 +2241,54 @@ export default function ConversationScreen() {
     async (
       item: Message
     ) => {
-      const {
-        error,
-      } = await supabase
-        .from('messages')
-        .update({
-          deleted_at:
-            new Date()
-              .toISOString(),
-        })
-        .eq(
-          'id',
-          item.id
-        );
+      try {
+        if (
+          item.attachment_path
+        ) {
+          const {
+            error:
+              storageError,
+          } =
+            await supabase
+              .storage
+              .from(
+                'message-attachments'
+              )
+              .remove([
+                item.attachment_path,
+              ]);
 
-      if (!error) {
+          if (storageError) {
+            Alert.alert(
+              'Unable to delete attachment',
+              storageError.message
+            );
+            return;
+          }
+        }
+
+        const {
+          error,
+        } = await supabase
+          .from('messages')
+          .update({
+            deleted_at:
+              new Date()
+                .toISOString(),
+          })
+          .eq(
+            'id',
+            item.id
+          );
+
+        if (error) {
+          Alert.alert(
+            'Unable to delete message',
+            error.message
+          );
+          return;
+        }
+
         setMessages(
           (current) =>
             current.filter(
@@ -2263,6 +2296,31 @@ export default function ConversationScreen() {
                 message.id !==
                 item.id
             )
+        );
+
+        setAttachmentUrlMap(
+          (current) => {
+            const next = {
+              ...current,
+            };
+
+            delete next[
+              item.id
+            ];
+
+            return next;
+          }
+        );
+      } catch (error: any) {
+        console.error(
+          'Delete message error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to delete message',
+          error?.message ??
+            'Please try again.'
         );
       }
     };
@@ -2273,7 +2331,9 @@ export default function ConversationScreen() {
     ) => {
       Alert.alert(
         'Delete Message',
-        'Delete this message?',
+        item.attachment_path
+          ? 'Delete this message and its attachment?'
+          : 'Delete this message?',
         [
           {
             text:
