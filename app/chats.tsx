@@ -84,13 +84,15 @@ export default function ChatsScreen() {
         return;
       }
 
-      const { data: conversations, error: conversationError } =
-        await supabase
-          .from('conversations')
-          .select(
-            'id, title, is_group, created_at'
-          )
-          .in('id', conversationIds);
+      const {
+        data: conversations,
+        error: conversationError,
+      } = await supabase
+        .from('conversations')
+        .select(
+          'id, title, is_group, created_at'
+        )
+        .in('id', conversationIds);
 
       if (conversationError) {
         Alert.alert(
@@ -215,6 +217,29 @@ export default function ChatsScreen() {
     }
   };
 
+  const showNewChatMenu = () => {
+    Alert.alert(
+      'New Conversation',
+      'What would you like to create?',
+      [
+        {
+          text: 'New Message',
+          onPress: () =>
+            router.push('/find-user'),
+        },
+        {
+          text: 'New Group',
+          onPress: () =>
+            router.push('/create-group'),
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ]
+    );
+  };
+
   const signOut = async () => {
     try {
       const { error } =
@@ -320,22 +345,16 @@ export default function ChatsScreen() {
                 router.push('/favourites')
               }
             >
-              <Text
-                style={styles.favouritesText}
-              >
+              <Text style={styles.favouritesText}>
                 ★
               </Text>
             </Pressable>
 
             <Pressable
               style={styles.newChatButton}
-              onPress={() =>
-                router.push('/find-user')
-              }
+              onPress={showNewChatMenu}
             >
-              <Text
-                style={styles.newChatText}
-              >
+              <Text style={styles.newChatText}>
                 +
               </Text>
             </Pressable>
@@ -354,16 +373,12 @@ export default function ChatsScreen() {
           />
         ) : chats.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text
-              style={styles.emptyTitle}
-            >
+            <Text style={styles.emptyTitle}>
               No conversations yet
             </Text>
 
-            <Text
-              style={styles.emptyText}
-            >
-              Tap the + button to find another Project Delivered user.
+            <Text style={styles.emptyText}>
+              Tap the + button to start a message or create a group.
             </Text>
           </View>
         ) : (
@@ -382,53 +397,55 @@ export default function ChatsScreen() {
                 })
               }
             >
-              <View style={styles.avatar}>
-                <Text
-                  style={styles.avatarText}
-                >
+              <View
+                style={[
+                  styles.avatar,
+                  chat.isGroup &&
+                    styles.groupAvatar,
+                ]}
+              >
+                <Text style={styles.avatarText}>
                   {chat.displayName
                     .charAt(0)
                     .toUpperCase()}
                 </Text>
               </View>
 
-              <View
-                style={styles.chatContent}
-              >
-                <View
-                  style={styles.chatTopRow}
-                >
-                  <Text
-                    style={styles.name}
-                    numberOfLines={1}
-                  >
-                    {chat.displayName}
-                  </Text>
+              <View style={styles.chatContent}>
+                <View style={styles.chatTopRow}>
+                  <View style={styles.nameRow}>
+                    <Text
+                      style={styles.name}
+                      numberOfLines={1}
+                    >
+                      {chat.displayName}
+                    </Text>
 
-                  <Text
-                    style={styles.time}
-                  >
+                    {chat.isGroup && (
+                      <Text
+                        style={styles.groupLabel}
+                      >
+                        GROUP
+                      </Text>
+                    )}
+                  </View>
+
+                  <Text style={styles.time}>
                     {formatChatTime(
                       chat.latestMessageAt
                     )}
                   </Text>
                 </View>
 
-                <View
-                  style={styles.previewRow}
+                <Text
+                  style={styles.preview}
+                  numberOfLines={1}
                 >
-                  <Text
-                    style={styles.preview}
-                    numberOfLines={1}
-                  >
-                    {chat.latestMessage}
-                  </Text>
-                </View>
+                  {chat.latestMessage}
+                </Text>
 
                 {chat.username && (
-                  <Text
-                    style={styles.username}
-                  >
+                  <Text style={styles.username}>
                     @{chat.username}
                   </Text>
                 )}
@@ -437,12 +454,8 @@ export default function ChatsScreen() {
           ))
         )}
 
-        <View
-          style={styles.developmentSection}
-        >
-          <Text
-            style={styles.developmentLabel}
-          >
+        <View style={styles.developmentSection}>
+          <Text style={styles.developmentLabel}>
             DEVELOPMENT
           </Text>
 
@@ -450,9 +463,7 @@ export default function ChatsScreen() {
             style={styles.devButton}
             onPress={signOut}
           >
-            <Text
-              style={styles.devButtonText}
-            >
+            <Text style={styles.devButtonText}>
               Sign Out
             </Text>
           </Pressable>
@@ -463,9 +474,7 @@ export default function ChatsScreen() {
               resetDevelopmentState
             }
           >
-            <Text
-              style={styles.devButtonText}
-            >
+            <Text style={styles.devButtonText}>
               Reset Onboarding
             </Text>
           </Pressable>
@@ -594,6 +603,10 @@ const styles = StyleSheet.create({
     marginRight: 14,
   },
 
+  groupAvatar: {
+    backgroundColor: '#EAF7EF',
+  },
+
   avatarText: {
     fontSize: 20,
     fontWeight: '700',
@@ -611,12 +624,30 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
 
-  name: {
+  nameRow: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
     marginRight: 10,
+  },
+
+  name: {
+    flexShrink: 1,
     fontSize: 17,
     fontWeight: '700',
     color: '#101828',
+  },
+
+  groupLabel: {
+    marginLeft: 8,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: '#027A48',
+    backgroundColor: '#ECFDF3',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 5,
   },
 
   time: {
@@ -624,13 +655,7 @@ const styles = StyleSheet.create({
     color: '#98A2B3',
   },
 
-  previewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
   preview: {
-    flex: 1,
     fontSize: 15,
     color: '#667085',
   },

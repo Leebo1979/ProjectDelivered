@@ -11,15 +11,20 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="(tabs)" />
+
         <Stack.Screen name="sign-up" />
         <Stack.Screen name="create-profile" />
         <Stack.Screen name="create-pin" />
         <Stack.Screen name="biometrics" />
         <Stack.Screen name="unlock" />
+
         <Stack.Screen name="chats" />
         <Stack.Screen name="conversation" />
         <Stack.Screen name="find-user" />
+        <Stack.Screen name="create-group" />
         <Stack.Screen name="favourites" />
+
+        <Stack.Screen name="modal" />
       </Stack>
 
       <StatusBar style="dark" />
