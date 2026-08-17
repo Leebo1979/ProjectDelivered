@@ -27,6 +27,7 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -431,6 +432,25 @@ export default function ConversationScreen() {
     useState<OtherUser | null>(null);
 
   const [
+    otherUserId,
+    setOtherUserId,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
+    isOtherUserOnline,
+    setIsOtherUserOnline,
+  ] = useState(false);
+
+  const [
+    otherLastSeenAt,
+    setOtherLastSeenAt,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
     conversationTitle,
     setConversationTitle,
   ] = useState('Conversation');
@@ -798,6 +818,165 @@ export default function ConversationScreen() {
 
   useEffect(() => {
     if (
+      !conversationId ||
+      !currentUserId ||
+      isGroup ||
+      !otherUserId
+    ) {
+      return;
+    }
+
+    const presenceChannel =
+      supabase.channel(
+        `presence:${conversationId}`,
+        {
+          config: {
+            presence: {
+              key:
+                currentUserId,
+            },
+          },
+        }
+      );
+
+    const syncPresence =
+      () => {
+        const state =
+          presenceChannel.presenceState();
+
+        setIsOtherUserOnline(
+          Object.keys(
+            state
+          ).includes(
+            otherUserId
+          )
+        );
+      };
+
+    presenceChannel
+      .on(
+        'presence',
+        {
+          event: 'sync',
+        },
+        syncPresence
+      )
+      .on(
+        'presence',
+        {
+          event: 'join',
+        },
+        syncPresence
+      )
+      .on(
+        'presence',
+        {
+          event: 'leave',
+        },
+        syncPresence
+      )
+      .subscribe(
+        async (
+          status
+        ) => {
+          if (
+            status ===
+            'SUBSCRIBED'
+          ) {
+            await presenceChannel.track(
+              {
+                userId:
+                  currentUserId,
+                onlineAt:
+                  new Date()
+                    .toISOString(),
+              }
+            );
+          }
+        }
+      );
+
+    const updateLastSeen =
+      async () => {
+        const now =
+          new Date()
+            .toISOString();
+
+        await supabase
+          .from(
+            'profiles'
+          )
+          .update({
+            last_seen_at:
+              now,
+          })
+          .eq(
+            'id',
+            currentUserId
+          );
+      };
+
+    const appStateSubscription =
+      AppState.addEventListener(
+        'change',
+        async (
+          nextState
+        ) => {
+          if (
+            nextState ===
+            'active'
+          ) {
+            try {
+              await presenceChannel.track(
+                {
+                  userId:
+                    currentUserId,
+                  onlineAt:
+                    new Date()
+                      .toISOString(),
+                }
+              );
+            } catch (error) {
+              console.error(
+                'Presence track error:',
+                error
+              );
+            }
+          } else {
+            await updateLastSeen();
+
+            try {
+              await presenceChannel.untrack();
+            } catch (error) {
+              console.error(
+                'Presence untrack error:',
+                error
+              );
+            }
+          }
+        }
+      );
+
+    return () => {
+      appStateSubscription.remove();
+
+      updateLastSeen();
+
+      presenceChannel.untrack();
+
+      supabase.removeChannel(
+        presenceChannel
+      );
+    };
+  }, [
+    conversationId,
+    currentUserId,
+    isGroup,
+    otherUserId,
+  ]);
+
+  useEffect(() => {
+    if (
       messages.length === 0
     ) {
       return;
@@ -1146,6 +1325,15 @@ export default function ConversationScreen() {
             conversation.is_group
           ) {
             setOtherUser(null);
+            setOtherUserId(
+              null
+            );
+            setIsOtherUserOnline(
+              false
+            );
+            setOtherLastSeenAt(
+              null
+            );
 
             setConversationTitle(
               conversation.title ??
@@ -1187,7 +1375,7 @@ export default function ConversationScreen() {
                       'profiles'
                     )
                     .select(
-                      'display_name, username'
+                      'display_name, username, last_seen_at'
                     )
                     .eq(
                       'id',
@@ -1196,8 +1384,20 @@ export default function ConversationScreen() {
                     .maybeSingle();
 
                 if (profile) {
-                  setOtherUser(
-                    profile
+                  setOtherUser({
+                    display_name:
+                      profile.display_name,
+                    username:
+                      profile.username,
+                  });
+
+                  setOtherUserId(
+                    otherMember.user_id
+                  );
+
+                  setOtherLastSeenAt(
+                    profile.last_seen_at ??
+                      null
                   );
 
                   setConversationTitle(
@@ -3003,6 +3203,83 @@ export default function ConversationScreen() {
       );
     };
 
+  const formatLastSeen =
+    (
+      timestamp:
+        string | null
+    ) => {
+      if (!timestamp) {
+        return 'Offline';
+      }
+
+      const date =
+        new Date(
+          timestamp
+        );
+
+      const now =
+        new Date();
+
+      const sameDay =
+        date.getFullYear() ===
+          now.getFullYear() &&
+        date.getMonth() ===
+          now.getMonth() &&
+        date.getDate() ===
+          now.getDate();
+
+      const yesterday =
+        new Date(
+          now
+        );
+
+      yesterday.setDate(
+        now.getDate() - 1
+      );
+
+      const wasYesterday =
+        date.getFullYear() ===
+          yesterday.getFullYear() &&
+        date.getMonth() ===
+          yesterday.getMonth() &&
+        date.getDate() ===
+          yesterday.getDate();
+
+      if (sameDay) {
+        return `Last seen ${date.toLocaleTimeString(
+          [],
+          {
+            hour:
+              'numeric',
+            minute:
+              '2-digit',
+          }
+        )}`;
+      }
+
+      if (wasYesterday) {
+        return `Last seen yesterday ${date.toLocaleTimeString(
+          [],
+          {
+            hour:
+              'numeric',
+            minute:
+              '2-digit',
+          }
+        )}`;
+      }
+
+      return `Last seen ${date.toLocaleDateString(
+        [],
+        {
+          day:
+            'numeric',
+          month:
+            'short',
+        }
+      )}`;
+    };
+
   return (
     <SafeAreaView
       style={
@@ -3129,9 +3406,11 @@ export default function ConversationScreen() {
                   ? typingText
                   : isGroup
                     ? 'Tap for group details'
-                    : otherUser
-                      ? `@${otherUser.username}`
-                      : 'Live'}
+                    : isOtherUserOnline
+                      ? 'Online'
+                      : formatLastSeen(
+                          otherLastSeenAt
+                        )}
               </Text>
             </View>
           </Pressable>
