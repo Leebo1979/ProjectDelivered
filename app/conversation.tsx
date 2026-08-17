@@ -484,6 +484,13 @@ export default function ConversationScreen() {
   );
 
   const [
+    reactionTarget,
+    setReactionTarget,
+  ] = useState<Message | null>(
+    null
+  );
+
+  const [
     fullScreenImageUrl,
     setFullScreenImageUrl,
   ] = useState<string | null>(
@@ -2076,7 +2083,7 @@ export default function ConversationScreen() {
       }
     };
 
-  const addReaction =
+  const toggleReaction =
     async (
       item: Message,
       emoji: string
@@ -2088,71 +2095,101 @@ export default function ConversationScreen() {
       }
 
       const {
-        error,
+        data: existing,
+        error:
+          existingError,
       } = await supabase
         .from(
           'message_reactions'
         )
-        .upsert(
-          {
+        .select(
+          'message_id'
+        )
+        .eq(
+          'message_id',
+          item.id
+        )
+        .eq(
+          'user_id',
+          currentUserId
+        )
+        .eq(
+          'emoji',
+          emoji
+        )
+        .maybeSingle();
+
+      if (existingError) {
+        Alert.alert(
+          'Unable to update reaction',
+          existingError.message
+        );
+        return;
+      }
+
+      if (existing) {
+        const {
+          error,
+        } = await supabase
+          .from(
+            'message_reactions'
+          )
+          .delete()
+          .eq(
+            'message_id',
+            item.id
+          )
+          .eq(
+            'user_id',
+            currentUserId
+          )
+          .eq(
+            'emoji',
+            emoji
+          );
+
+        if (error) {
+          Alert.alert(
+            'Unable to remove reaction',
+            error.message
+          );
+          return;
+        }
+      } else {
+        const {
+          error,
+        } = await supabase
+          .from(
+            'message_reactions'
+          )
+          .insert({
             message_id:
               item.id,
             user_id:
               currentUserId,
             emoji,
-          },
-          {
-            onConflict:
-              'message_id,user_id,emoji',
-          }
-        );
+          });
 
-      if (!error) {
-        await loadReactions(
-          messages
-        );
+        if (error) {
+          Alert.alert(
+            'Unable to add reaction',
+            error.message
+          );
+          return;
+        }
       }
+
+      await loadReactions(
+        messages
+      );
     };
 
   const showReactionPicker =
     (
       item: Message
     ) => {
-      Alert.alert(
-        'React',
-        'Choose a reaction',
-        [
-          {
-            text: '👍',
-            onPress: () =>
-              addReaction(
-                item,
-                '👍'
-              ),
-          },
-          {
-            text: '❤️',
-            onPress: () =>
-              addReaction(
-                item,
-                '❤️'
-              ),
-          },
-          {
-            text: '😂',
-            onPress: () =>
-              addReaction(
-                item,
-                '😂'
-              ),
-          },
-          {
-            text:
-              'Cancel',
-            style:
-              'cancel',
-          },
-        ]
+      setReactionTarget(
+        item
       );
     };
 
@@ -3020,6 +3057,34 @@ export default function ConversationScreen() {
                   item.id
                 ] ?? [];
 
+              const groupedReactions =
+                Object.entries(
+                  reactions.reduce<
+                    Record<
+                      string,
+                      number
+                    >
+                  >(
+                    (
+                      counts,
+                      emoji
+                    ) => {
+                      counts[
+                        emoji
+                      ] =
+                        (
+                          counts[
+                            emoji
+                          ] ??
+                          0
+                        ) + 1;
+
+                      return counts;
+                    },
+                    {}
+                  )
+                );
+
               const senderName =
                 senderNameMap[
                   item.sender_id
@@ -3280,26 +3345,53 @@ export default function ConversationScreen() {
                       </View>
                     ) : null}
 
-                    {reactions.length >
+                    {groupedReactions.length >
                       0 && (
                       <View
                         style={
                           styles.reactionRow
                         }
                       >
-                        {reactions.map(
-                          (
+                        {groupedReactions.map(
+                          ([
                             emoji,
-                            index
-                          ) => (
-                            <Text
-                              key={`${emoji}-${index}`}
+                            count,
+                          ]) => (
+                            <Pressable
+                              key={
+                                emoji
+                              }
                               style={
-                                styles.reaction
+                                styles.reactionChip
+                              }
+                              onPress={() =>
+                                toggleReaction(
+                                  item,
+                                  emoji
+                                )
                               }
                             >
-                              {emoji}
-                            </Text>
+                              <Text
+                                style={
+                                  styles.reaction
+                                }
+                              >
+                                {emoji}
+                              </Text>
+
+                              {count >
+                                1 && (
+                                <Text
+                                  style={
+                                    styles.reactionCount
+                                  }
+                                >
+                                  {
+                                    count
+                                  }
+                                </Text>
+                              )}
+                            </Pressable>
                           )
                         )}
                       </View>
@@ -3687,6 +3779,103 @@ export default function ConversationScreen() {
             )}
           </Pressable>
         </View>
+
+        <Modal
+          visible={
+            !!reactionTarget
+          }
+          transparent
+          animationType="fade"
+          onRequestClose={() =>
+            setReactionTarget(
+              null
+            )
+          }
+        >
+          <Pressable
+            style={
+              styles.reactionModalBackdrop
+            }
+            onPress={() =>
+              setReactionTarget(
+                null
+              )
+            }
+          >
+            <Pressable
+              style={
+                styles.reactionPickerCard
+              }
+              onPress={() => {}}
+            >
+              <Text
+                style={
+                  styles.reactionPickerTitle
+                }
+              >
+                React
+              </Text>
+
+              <View
+                style={
+                  styles.reactionPickerGrid
+                }
+              >
+                {[
+                  '👍',
+                  '❤️',
+                  '😂',
+                  '😮',
+                  '😢',
+                  '😡',
+                  '🎉',
+                  '🔥',
+                  '👏',
+                  '✅',
+                  '🙏',
+                  '💯',
+                ].map(
+                  (
+                    emoji
+                  ) => (
+                    <Pressable
+                      key={
+                        emoji
+                      }
+                      style={
+                        styles.reactionPickerEmojiButton
+                      }
+                      onPress={async () => {
+                        if (
+                          reactionTarget
+                        ) {
+                          await toggleReaction(
+                            reactionTarget,
+                            emoji
+                          );
+                        }
+
+                        setReactionTarget(
+                          null
+                        );
+                      }}
+                    >
+                      <Text
+                        style={
+                          styles.reactionPickerEmoji
+                        }
+                      >
+                        {
+                          emoji
+                        }
+                      </Text>
+                    </Pressable>
+                  )
+                )}
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         <Modal
           visible={
@@ -4082,14 +4271,101 @@ const styles =
       color: '#FFFFFF',
     },
 
+    reactionModalBackdrop: {
+      flex: 1,
+      backgroundColor:
+        'rgba(16,24,40,0.36)',
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      paddingHorizontal: 24,
+    },
+
+    reactionPickerCard: {
+      width: '100%',
+      maxWidth: 340,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      paddingHorizontal: 18,
+      paddingTop: 18,
+      paddingBottom: 16,
+      shadowColor:
+        '#101828',
+      shadowOpacity: 0.18,
+      shadowRadius: 18,
+      shadowOffset: {
+        width: 0,
+        height: 8,
+      },
+      elevation: 12,
+    },
+
+    reactionPickerTitle: {
+      fontSize: 16,
+      fontWeight: '800',
+      color:
+        '#101828',
+      marginBottom: 14,
+    },
+
+    reactionPickerGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent:
+        'space-between',
+    },
+
+    reactionPickerEmojiButton: {
+      width: '15%',
+      aspectRatio: 1,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      marginBottom: 10,
+      backgroundColor:
+        '#F9FAFB',
+      borderWidth: 1,
+      borderColor:
+        '#EAECF0',
+    },
+
+    reactionPickerEmoji: {
+      fontSize: 24,
+    },
+
     reactionRow: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       marginTop: 5,
     },
 
+    reactionChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: 28,
+      paddingHorizontal: 8,
+      borderRadius: 14,
+      backgroundColor:
+        '#F2F4F7',
+      borderWidth: 1,
+      borderColor:
+        '#EAECF0',
+      marginRight: 5,
+      marginBottom: 4,
+    },
+
     reaction: {
-      fontSize: 17,
-      marginRight: 4,
+      fontSize: 16,
+    },
+
+    reactionCount: {
+      marginLeft: 4,
+      fontSize: 11,
+      fontWeight: '700',
+      color:
+        '#667085',
     },
 
     metaRow: {

@@ -44,19 +44,27 @@ export default function ForwardMessageScreen() {
   const [
     conversations,
     setConversations,
-  ] = useState<ConversationItem[]>([]);
+  ] = useState<
+    ConversationItem[]
+  >([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
 
   const [
     forwardingId,
     setForwardingId,
-  ] = useState<string | null>(null);
+  ] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     loadConversations();
-  }, []);
+  }, [
+    sourceConversationId,
+  ]);
 
   const loadConversations =
     async () => {
@@ -110,15 +118,23 @@ export default function ForwardMessageScreen() {
           (
             memberships ??
             []
-          ).map(
-            (item) =>
-              item.conversation_id
-          );
+          )
+            .map(
+              (item) =>
+                item.conversation_id
+            )
+            .filter(
+              (id) =>
+                id !==
+                sourceConversationId
+            );
 
         if (
           ids.length === 0
         ) {
-          setConversations([]);
+          setConversations(
+            []
+          );
           return;
         }
 
@@ -149,81 +165,114 @@ export default function ForwardMessageScreen() {
           return;
         }
 
-        const mapped =
+        const mappedResults =
           await Promise.all(
             (
               conversationRows ??
               []
             ).map(
               async (
-                conversation: Conversation
+                conversation:
+                  Conversation
               ) => {
                 let displayName =
                   conversation.title ??
                   'Conversation';
 
                 if (
-                  !conversation.is_group
+                  conversation.is_group
                 ) {
-                  const {
-                    data:
-                      members,
-                  } =
-                    await supabase
-                      .from(
-                        'conversation_members'
-                      )
-                      .select(
-                        'user_id'
-                      )
-                      .eq(
-                        'conversation_id',
-                        conversation.id
-                      );
+                  return {
+                    id:
+                      conversation.id,
+                    displayName,
+                    isGroup: true,
+                  } as ConversationItem;
+                }
 
-                  const other =
-                    members?.find(
-                      (
-                        member
-                      ) =>
-                        member.user_id !==
-                        user.id
+                const {
+                  data:
+                    members,
+                  error:
+                    membersError,
+                } =
+                  await supabase
+                    .from(
+                      'conversation_members'
+                    )
+                    .select(
+                      'user_id'
+                    )
+                    .eq(
+                      'conversation_id',
+                      conversation.id
                     );
 
-                  if (other) {
-                    const {
-                      data:
-                        profile,
-                    } =
-                      await supabase
-                        .from(
-                          'profiles'
-                        )
-                        .select(
-                          'display_name'
-                        )
-                        .eq(
-                          'id',
-                          other.user_id
-                        )
-                        .maybeSingle();
-
-                    if (profile) {
-                      displayName =
-                        profile.display_name;
-                    }
-                  }
+                if (
+                  membersError
+                ) {
+                  console.error(
+                    'Forward member load error:',
+                    membersError
+                  );
+                  return null;
                 }
+
+                const other =
+                  members?.find(
+                    (
+                      member
+                    ) =>
+                      member.user_id !==
+                      user.id
+                  );
+
+                if (!other) {
+                  return null;
+                }
+
+                const {
+                  data:
+                    profile,
+                } =
+                  await supabase
+                    .from(
+                      'profiles'
+                    )
+                    .select(
+                      'display_name'
+                    )
+                    .eq(
+                      'id',
+                      other.user_id
+                    )
+                    .maybeSingle();
+
+                if (
+                  !profile
+                ) {
+                  return null;
+                }
+
+                displayName =
+                  profile.display_name;
 
                 return {
                   id:
                     conversation.id,
                   displayName,
-                  isGroup:
-                    conversation.is_group,
-                };
+                  isGroup: false,
+                } as ConversationItem;
               }
             )
+          );
+
+        const mapped =
+          mappedResults.filter(
+            (
+              item
+            ): item is ConversationItem =>
+              item !== null
           );
 
         mapped.sort(
@@ -263,6 +312,17 @@ export default function ForwardMessageScreen() {
         return;
       }
 
+      if (
+        destinationConversationId ===
+        sourceConversationId
+      ) {
+        Alert.alert(
+          'Choose another conversation',
+          'You cannot forward a message back into the same conversation.'
+        );
+        return;
+      }
+
       try {
         setForwardingId(
           destinationConversationId
@@ -287,6 +347,41 @@ export default function ForwardMessageScreen() {
 
         const {
           data:
+            destinationMembership,
+          error:
+            destinationMembershipError,
+        } = await supabase
+          .from(
+            'conversation_members'
+          )
+          .select(
+            'conversation_id'
+          )
+          .eq(
+            'conversation_id',
+            destinationConversationId
+          )
+          .eq(
+            'user_id',
+            user.id
+          )
+          .maybeSingle();
+
+        if (
+          destinationMembershipError ||
+          !destinationMembership
+        ) {
+          Alert.alert(
+            'Unable to forward message',
+            destinationMembershipError
+              ?.message ??
+              'You are not a member of that conversation.'
+          );
+          return;
+        }
+
+        const {
+          data:
             sourceMessage,
           error:
             sourceError,
@@ -304,6 +399,10 @@ export default function ForwardMessageScreen() {
           .eq(
             'id',
             messageId
+          )
+          .is(
+            'deleted_at',
+            null
           )
           .maybeSingle();
 
@@ -425,7 +524,7 @@ export default function ForwardMessageScreen() {
                 styles.subtitle
               }
             >
-              Choose a conversation
+              Choose another conversation
             </Text>
           </View>
         </View>
@@ -457,7 +556,7 @@ export default function ForwardMessageScreen() {
                   styles.emptyText
                 }
               >
-                No conversations available.
+                No other conversations available.
               </Text>
             }
             renderItem={({
