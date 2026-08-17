@@ -1,0 +1,2732 @@
+import { router, useFocusEffect } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+import { registerForPushNotifications } from '../lib/notifications';
+import { supabase } from '../lib/supabase';
+
+const ONBOARDING_KEY =
+  'project_delivered_onboarding_complete';
+
+const BIOMETRICS_KEY =
+  'project_delivered_biometrics_enabled';
+
+const PIN_STORAGE_KEY =
+  'project_delivered_pin';
+
+type ConversationRow = {
+  id: string;
+  title: string | null;
+  is_group: boolean;
+  created_at: string;
+  avatar_path: string | null;
+};
+
+type ChatListItem = {
+  id: string;
+  displayName: string;
+  username: string | null;
+  latestMessage: string;
+  latestMessageAt: string | null;
+  isGroup: boolean;
+  unreadCount: number;
+  isMuted: boolean;
+  mutedUntil: string | null;
+  isPinned: boolean;
+  avatarUrl: string | null;
+};
+
+export default function ChatsScreen() {
+  const [chats, setChats] =
+    useState<ChatListItem[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [
+    currentUserAvatarUrl,
+    setCurrentUserAvatarUrl,
+  ] = useState<string | null>(
+    null
+  );
+
+  useEffect(() => {
+    registerForPushNotifications();
+  }, []);
+
+  useEffect(() => {
+    let messageChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let readChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let muteChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let pinChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let archiveChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let deletedChannel:
+      ReturnType<typeof supabase.channel> | null =
+      null;
+
+    let cancelled = false;
+
+    const channelInstance =
+      `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`;
+
+    const subscribeToRealtime =
+      async () => {
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (
+          cancelled ||
+          error ||
+          !user
+        ) {
+          return;
+        }
+
+        messageChannel =
+          supabase
+            .channel(
+              `chat-list-messages:${user.id}:${channelInstance}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table: 'messages',
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+
+        readChannel =
+          supabase
+            .channel(
+              `chat-list-reads:${user.id}:${channelInstance}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'message_reads',
+              },
+              async (
+                payload
+              ) => {
+                const row =
+                  (
+                    payload.new ??
+                    payload.old
+                  ) as {
+                    user_id?:
+                      string;
+                  };
+
+                if (
+                  row.user_id ===
+                  user.id
+                ) {
+                  await loadChats(
+                    false
+                  );
+                }
+              }
+            )
+            .subscribe();
+
+        muteChannel =
+          supabase
+            .channel(
+              `chat-list-mutes:${user.id}:${channelInstance}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'muted_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+
+        pinChannel =
+          supabase
+            .channel(
+              `chat-list-pins:${user.id}:${channelInstance}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'pinned_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+
+        archiveChannel =
+          supabase
+            .channel(
+              `chat-list-archives:${user.id}:${channelInstance}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'archived_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+
+        deletedChannel =
+          supabase
+            .channel(
+              `chat-list-deleted:${user.id}:${channelInstance}`
+            )
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table:
+                  'deleted_conversations',
+                filter:
+                  `user_id=eq.${user.id}`,
+              },
+              async () => {
+                await loadChats(
+                  false
+                );
+              }
+            )
+            .subscribe();
+      };
+
+    subscribeToRealtime();
+
+    return () => {
+      cancelled = true;
+
+      if (
+        messageChannel
+      ) {
+        supabase.removeChannel(
+          messageChannel
+        );
+      }
+
+      if (
+        readChannel
+      ) {
+        supabase.removeChannel(
+          readChannel
+        );
+      }
+
+      if (
+        muteChannel
+      ) {
+        supabase.removeChannel(
+          muteChannel
+        );
+      }
+
+      if (
+        pinChannel
+      ) {
+        supabase.removeChannel(
+          pinChannel
+        );
+      }
+
+      if (
+        archiveChannel
+      ) {
+        supabase.removeChannel(
+          archiveChannel
+        );
+      }
+
+      if (
+        deletedChannel
+      ) {
+        supabase.removeChannel(
+          deletedChannel
+        );
+      }
+    };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadChats();
+    }, [])
+  );
+
+  const loadChats = async (
+    showLoader = true
+  ) => {
+    try {
+      if (showLoader) {
+        setLoading(true);
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+
+        router.replace('/sign-up');
+        return;
+      }
+
+      const {
+        data:
+          currentProfile,
+      } = await supabase
+        .from(
+          'profiles'
+        )
+        .select(
+          'avatar_path'
+        )
+        .eq(
+          'id',
+          user.id
+        )
+        .maybeSingle();
+
+      if (
+        currentProfile
+          ?.avatar_path
+      ) {
+        const {
+          data:
+            currentAvatarData,
+          error:
+            currentAvatarError,
+        } =
+          await supabase
+            .storage
+            .from(
+              'message-attachments'
+            )
+            .createSignedUrl(
+              currentProfile.avatar_path,
+              60 * 60
+            );
+
+        if (
+          !currentAvatarError &&
+          currentAvatarData
+        ) {
+          setCurrentUserAvatarUrl(
+            currentAvatarData.signedUrl
+          );
+        } else {
+          setCurrentUserAvatarUrl(
+            null
+          );
+        }
+      } else {
+        setCurrentUserAvatarUrl(
+          null
+        );
+      }
+
+      const {
+        data: memberships,
+        error: membershipError,
+      } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', user.id);
+
+      if (membershipError) {
+        Alert.alert(
+          'Unable to load chats',
+          membershipError.message
+        );
+        return;
+      }
+
+      const conversationIds =
+        memberships?.map(
+          (item) =>
+            item.conversation_id
+        ) ?? [];
+
+      if (
+        conversationIds.length === 0
+      ) {
+        setChats([]);
+        return;
+      }
+
+      const {
+        data: conversations,
+        error: conversationError,
+      } = await supabase
+        .from('conversations')
+        .select(
+          'id, title, is_group, created_at, avatar_path'
+        )
+        .in(
+          'id',
+          conversationIds
+        );
+
+      if (conversationError) {
+        Alert.alert(
+          'Unable to load chats',
+          conversationError.message
+        );
+        return;
+      }
+
+      const {
+        data: mutedRows,
+        error: mutedError,
+      } = await supabase
+        .from(
+          'muted_conversations'
+        )
+        .select(
+          'conversation_id, muted_until'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (mutedError) {
+        console.error(
+          'Muted conversations load error:',
+          mutedError
+        );
+      }
+
+      const mutedMap =
+        new Map<
+          string,
+          string | null
+        >();
+
+      const now =
+        Date.now();
+
+      for (
+        const item
+        of mutedRows ?? []
+      ) {
+        const mutedUntil =
+          item.muted_until ??
+          null;
+
+        const stillMuted =
+          !mutedUntil ||
+          new Date(
+            mutedUntil
+          ).getTime() >
+            now;
+
+        if (stillMuted) {
+          mutedMap.set(
+            item.conversation_id,
+            mutedUntil
+          );
+        }
+      }
+
+      const {
+        data: pinnedRows,
+        error: pinnedError,
+      } = await supabase
+        .from(
+          'pinned_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (pinnedError) {
+        console.error(
+          'Pinned conversations load error:',
+          pinnedError
+        );
+      }
+
+      const pinnedIds =
+        new Set(
+          (
+            pinnedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
+
+      const {
+        data: archivedRows,
+        error: archivedError,
+      } = await supabase
+        .from(
+          'archived_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (archivedError) {
+        console.error(
+          'Archived conversations load error:',
+          archivedError
+        );
+      }
+
+      const archivedIds =
+        new Set(
+          (
+            archivedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
+
+      const {
+        data: deletedRows,
+        error: deletedError,
+      } = await supabase
+        .from(
+          'deleted_conversations'
+        )
+        .select(
+          'conversation_id'
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .in(
+          'conversation_id',
+          conversationIds
+        );
+
+      if (deletedError) {
+        console.error(
+          'Deleted conversations load error:',
+          deletedError
+        );
+      }
+
+      const deletedIds =
+        new Set(
+          (
+            deletedRows ??
+            []
+          ).map(
+            (item) =>
+              item.conversation_id
+          )
+        );
+
+      const visibleConversations =
+        (
+          conversations as ConversationRow[]
+        ).filter(
+          (conversation) =>
+            !archivedIds.has(
+              conversation.id
+            ) &&
+            !deletedIds.has(
+              conversation.id
+            )
+        );
+
+      const chatItems =
+        await Promise.all(
+          visibleConversations.map(
+            async (
+              conversation
+            ) => {
+              let displayName =
+                conversation.title ??
+                'Conversation';
+
+              let username:
+                string | null =
+                null;
+
+              let directAvatarPath:
+                string | null =
+                null;
+
+              if (
+                !conversation.is_group
+              ) {
+                const {
+                  data:
+                    memberRows,
+                  error:
+                    membersError,
+                } =
+                  await supabase
+                    .from(
+                      'conversation_members'
+                    )
+                    .select(
+                      'user_id'
+                    )
+                    .eq(
+                      'conversation_id',
+                      conversation.id
+                    );
+
+                if (
+                  !membersError
+                ) {
+                  const otherMember =
+                    memberRows?.find(
+                      (
+                        member
+                      ) =>
+                        member.user_id !==
+                        user.id
+                    );
+
+                  if (
+                    otherMember
+                  ) {
+                    const {
+                      data:
+                        otherProfile,
+                    } =
+                      await supabase
+                        .from(
+                          'profiles'
+                        )
+                        .select(
+                          'display_name, username, avatar_path'
+                        )
+                        .eq(
+                          'id',
+                          otherMember.user_id
+                        )
+                        .maybeSingle();
+
+                    if (
+                      otherProfile
+                    ) {
+                      displayName =
+                        otherProfile.display_name;
+
+                      username =
+                        otherProfile.username;
+
+                      directAvatarPath =
+                        otherProfile.avatar_path ??
+                        null;
+                    }
+                  }
+                }
+              }
+
+              const {
+                data:
+                  latestMessageRows,
+              } = await supabase
+                .from('messages')
+                .select(
+                  'id, body, created_at'
+                )
+                .eq(
+                  'conversation_id',
+                  conversation.id
+                )
+                .is(
+                  'deleted_at',
+                  null
+                )
+                .order(
+                  'created_at',
+                  {
+                    ascending:
+                      false,
+                  }
+                )
+                .limit(1);
+
+              const latestMessage =
+                latestMessageRows?.[0];
+
+              let avatarUrl:
+                string | null =
+                null;
+
+              const avatarPath =
+                conversation.is_group
+                  ? conversation.avatar_path
+                  : directAvatarPath;
+
+              if (avatarPath) {
+                const {
+                  data:
+                    avatarData,
+                  error:
+                    avatarError,
+                } =
+                  await supabase
+                    .storage
+                    .from(
+                      'message-attachments'
+                    )
+                    .createSignedUrl(
+                      avatarPath,
+                      60 * 60
+                    );
+
+                if (
+                  !avatarError &&
+                  avatarData
+                ) {
+                  avatarUrl =
+                    avatarData.signedUrl;
+                }
+              }
+
+              const {
+                data:
+                  incomingMessages,
+                error:
+                  incomingError,
+              } = await supabase
+                .from('messages')
+                .select('id')
+                .eq(
+                  'conversation_id',
+                  conversation.id
+                )
+                .neq(
+                  'sender_id',
+                  user.id
+                )
+                .is(
+                  'deleted_at',
+                  null
+                );
+
+              let unreadCount = 0;
+
+              if (
+                !incomingError &&
+                incomingMessages &&
+                incomingMessages.length >
+                  0
+              ) {
+                const incomingIds =
+                  incomingMessages.map(
+                    (
+                      item
+                    ) => item.id
+                  );
+
+                const {
+                  data:
+                    readRows,
+                  error:
+                    readError,
+                } = await supabase
+                  .from(
+                    'message_reads'
+                  )
+                  .select(
+                    'message_id'
+                  )
+                  .eq(
+                    'user_id',
+                    user.id
+                  )
+                  .in(
+                    'message_id',
+                    incomingIds
+                  );
+
+                if (!readError) {
+                  const readIds =
+                    new Set(
+                      (
+                        readRows ??
+                        []
+                      ).map(
+                        (
+                          item
+                        ) =>
+                          item.message_id
+                      )
+                    );
+
+                  unreadCount =
+                    incomingIds.filter(
+                      (
+                        id
+                      ) =>
+                        !readIds.has(
+                          id
+                        )
+                    ).length;
+                }
+              }
+
+              return {
+                id:
+                  conversation.id,
+
+                displayName,
+
+                username,
+
+                latestMessage:
+                  latestMessage?.body ??
+                  'No messages yet',
+
+                latestMessageAt:
+                  latestMessage?.created_at ??
+                  conversation.created_at,
+
+                isGroup:
+                  conversation.is_group,
+
+                unreadCount,
+
+                isMuted:
+                  mutedMap.has(
+                    conversation.id
+                  ),
+
+                mutedUntil:
+                  mutedMap.get(
+                    conversation.id
+                  ) ??
+                  null,
+
+                isPinned:
+                  pinnedIds.has(
+                    conversation.id
+                  ),
+
+                avatarUrl,
+              };
+            }
+          )
+        );
+
+      chatItems.sort(
+        (a, b) => {
+          if (
+            a.isPinned !==
+            b.isPinned
+          ) {
+            return a.isPinned
+              ? -1
+              : 1;
+          }
+
+          const aTime =
+            a.latestMessageAt
+              ? new Date(
+                  a.latestMessageAt
+                ).getTime()
+              : 0;
+
+          const bTime =
+            b.latestMessageAt
+              ? new Date(
+                  b.latestMessageAt
+                ).getTime()
+              : 0;
+
+          return bTime - aTime;
+        }
+      );
+
+      setChats(chatItems);
+    } catch (error) {
+      console.error(
+        'Load chats error:',
+        error
+      );
+
+      Alert.alert(
+        'Unable to load chats',
+        'Please try again.'
+      );
+    } finally {
+      if (showLoader) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const togglePin =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      if (chat.isPinned) {
+        const {
+          error,
+        } = await supabase
+          .from(
+            'pinned_conversations'
+          )
+          .delete()
+          .eq(
+            'user_id',
+            user.id
+          )
+          .eq(
+            'conversation_id',
+            chat.id
+          );
+
+        if (error) {
+          Alert.alert(
+            'Unable to unpin',
+            error.message
+          );
+          return;
+        }
+
+        setChats(
+          (current) =>
+            current
+              .map(
+                (item) =>
+                  item.id ===
+                  chat.id
+                    ? {
+                        ...item,
+                        isPinned:
+                          false,
+                      }
+                    : item
+              )
+              .sort(
+                (a, b) => {
+                  if (
+                    a.isPinned !==
+                    b.isPinned
+                  ) {
+                    return a.isPinned
+                      ? -1
+                      : 1;
+                  }
+
+                  const aTime =
+                    a.latestMessageAt
+                      ? new Date(
+                          a.latestMessageAt
+                        ).getTime()
+                      : 0;
+
+                  const bTime =
+                    b.latestMessageAt
+                      ? new Date(
+                          b.latestMessageAt
+                        ).getTime()
+                      : 0;
+
+                  return (
+                    bTime -
+                    aTime
+                  );
+                }
+              )
+        );
+
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from(
+          'pinned_conversations'
+        )
+        .insert({
+          user_id:
+            user.id,
+          conversation_id:
+            chat.id,
+        });
+
+      if (error) {
+        Alert.alert(
+          'Unable to pin',
+          error.message
+        );
+        return;
+      }
+
+      setChats(
+        (current) =>
+          current
+            .map(
+              (item) =>
+                item.id ===
+                chat.id
+                  ? {
+                      ...item,
+                      isPinned:
+                        true,
+                    }
+                  : item
+            )
+            .sort(
+              (a, b) => {
+                if (
+                  a.isPinned !==
+                  b.isPinned
+                ) {
+                  return a.isPinned
+                    ? -1
+                    : 1;
+                }
+
+                const aTime =
+                  a.latestMessageAt
+                    ? new Date(
+                        a.latestMessageAt
+                      ).getTime()
+                    : 0;
+
+                const bTime =
+                  b.latestMessageAt
+                    ? new Date(
+                        b.latestMessageAt
+                      ).getTime()
+                    : 0;
+
+                return (
+                  bTime -
+                  aTime
+                );
+              }
+            )
+      );
+    };
+
+  const setMuteDuration =
+    async (
+      chat: ChatListItem,
+      mutedUntil:
+        string | null
+    ) => {
+      const {
+        data: { user },
+        error:
+          userError,
+      } =
+        await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from(
+          'muted_conversations'
+        )
+        .upsert(
+          {
+            user_id:
+              user.id,
+            conversation_id:
+              chat.id,
+            muted_until:
+              mutedUntil,
+          },
+          {
+            onConflict:
+              'user_id,conversation_id',
+          }
+        );
+
+      if (error) {
+        Alert.alert(
+          'Unable to mute',
+          error.message
+        );
+        return;
+      }
+
+      setChats(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              chat.id
+                ? {
+                    ...item,
+                    isMuted:
+                      true,
+                    mutedUntil,
+                  }
+                : item
+          )
+      );
+    };
+
+  const unmuteConversation =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error:
+          userError,
+      } =
+        await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      const {
+        error,
+      } = await supabase
+        .from(
+          'muted_conversations'
+        )
+        .delete()
+        .eq(
+          'user_id',
+          user.id
+        )
+        .eq(
+          'conversation_id',
+          chat.id
+        );
+
+      if (error) {
+        Alert.alert(
+          'Unable to unmute',
+          error.message
+        );
+        return;
+      }
+
+      setChats(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              chat.id
+                ? {
+                    ...item,
+                    isMuted:
+                      false,
+                    mutedUntil:
+                      null,
+                  }
+                : item
+          )
+      );
+    };
+
+  const showMuteOptions =
+    (
+      chat: ChatListItem
+    ) => {
+      if (chat.isMuted) {
+        Alert.alert(
+          'Notifications muted',
+          'Turn notifications back on for this conversation?',
+          [
+            {
+              text:
+                'Cancel',
+              style:
+                'cancel',
+            },
+            {
+              text:
+                'Unmute',
+              onPress: () =>
+                unmuteConversation(
+                  chat
+                ),
+            },
+          ]
+        );
+
+        return;
+      }
+
+      const now =
+        Date.now();
+
+      Alert.alert(
+        'Mute Notifications',
+        'Choose how long to mute this conversation.',
+        [
+          {
+            text:
+              '1 Hour',
+            onPress: () =>
+              setMuteDuration(
+                chat,
+                new Date(
+                  now +
+                    60 *
+                      60 *
+                      1000
+                ).toISOString()
+              ),
+          },
+          {
+            text:
+              '8 Hours',
+            onPress: () =>
+              setMuteDuration(
+                chat,
+                new Date(
+                  now +
+                    8 *
+                      60 *
+                      60 *
+                      1000
+                ).toISOString()
+              ),
+          },
+          {
+            text:
+              '1 Week',
+            onPress: () =>
+              setMuteDuration(
+                chat,
+                new Date(
+                  now +
+                    7 *
+                      24 *
+                      60 *
+                      60 *
+                      1000
+                ).toISOString()
+              ),
+          },
+          {
+            text:
+              'Until I turn it back on',
+            onPress: () =>
+              setMuteDuration(
+                chat,
+                null
+              ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
+
+  const deleteDirectConversation =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Delete Chat',
+        `Remove ${chat.displayName} from your Chats list? This will not delete the other person's copy or the shared message history.`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Delete Chat',
+            style:
+              'destructive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } = await supabase
+                  .from(
+                    'deleted_conversations'
+                  )
+                  .upsert(
+                    {
+                      user_id:
+                        user.id,
+                      conversation_id:
+                        chat.id,
+                    },
+                    {
+                      onConflict:
+                        'user_id,conversation_id',
+                    }
+                  );
+
+                if (error) {
+                  Alert.alert(
+                    'Unable to delete chat',
+                    error.message
+                  );
+                  return;
+                }
+
+                setChats(
+                  (current) =>
+                    current.filter(
+                      (item) =>
+                        item.id !==
+                        chat.id
+                    )
+                );
+              },
+          },
+        ]
+      );
+    };
+
+  const leaveGroup =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      const {
+        data: membership,
+        error:
+          membershipError,
+      } = await supabase
+        .from(
+          'conversation_members'
+        )
+        .select(
+          'role'
+        )
+        .eq(
+          'conversation_id',
+          chat.id
+        )
+        .eq(
+          'user_id',
+          user.id
+        )
+        .maybeSingle();
+
+      if (
+        membershipError
+      ) {
+        Alert.alert(
+          'Unable to leave group',
+          membershipError.message
+        );
+        return;
+      }
+
+      if (
+        membership?.role ===
+        'owner'
+      ) {
+        Alert.alert(
+          'Transfer ownership first',
+          'You are the owner of this group. Transfer ownership to another member before leaving.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Leave Group',
+        `Leave ${chat.displayName}?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Leave Group',
+            style:
+              'destructive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } = await supabase
+                  .from(
+                    'conversation_members'
+                  )
+                  .delete()
+                  .eq(
+                    'conversation_id',
+                    chat.id
+                  )
+                  .eq(
+                    'user_id',
+                    user.id
+                  );
+
+                if (error) {
+                  Alert.alert(
+                    'Unable to leave group',
+                    error.message
+                  );
+                  return;
+                }
+
+                await Promise.all([
+                  supabase
+                    .from(
+                      'muted_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+
+                  supabase
+                    .from(
+                      'pinned_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+
+                  supabase
+                    .from(
+                      'archived_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+
+                  supabase
+                    .from(
+                      'deleted_conversations'
+                    )
+                    .delete()
+                    .eq(
+                      'user_id',
+                      user.id
+                    )
+                    .eq(
+                      'conversation_id',
+                      chat.id
+                    ),
+                ]);
+
+                setChats(
+                  (current) =>
+                    current.filter(
+                      (item) =>
+                        item.id !==
+                        chat.id
+                    )
+                );
+              },
+          },
+        ]
+      );
+    };
+
+  const archiveConversation =
+    async (
+      chat: ChatListItem
+    ) => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (
+        userError ||
+        !user
+      ) {
+        Alert.alert(
+          'Not signed in',
+          'Please sign in again.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Archive Conversation',
+        `Archive ${chat.displayName}?`,
+        [
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+          {
+            text:
+              'Archive',
+            onPress:
+              async () => {
+                const {
+                  error,
+                } = await supabase
+                  .from(
+                    'archived_conversations'
+                  )
+                  .insert({
+                    user_id:
+                      user.id,
+                    conversation_id:
+                      chat.id,
+                  });
+
+                if (error) {
+                  Alert.alert(
+                    'Unable to archive',
+                    error.message
+                  );
+                  return;
+                }
+
+                setChats(
+                  (current) =>
+                    current.filter(
+                      (item) =>
+                        item.id !==
+                        chat.id
+                    )
+                );
+              },
+          },
+        ]
+      );
+    };
+
+  const showChatActions =
+    (
+      chat: ChatListItem
+    ) => {
+      Alert.alert(
+        chat.displayName,
+        chat.isMuted
+          ? 'Notifications are muted for this conversation.'
+          : 'Choose an action.',
+        [
+          {
+            text:
+              chat.isPinned
+                ? 'Unpin Conversation'
+                : 'Pin Conversation',
+            onPress: () =>
+              togglePin(
+                chat
+              ),
+          },
+          {
+            text:
+              chat.isMuted
+                ? 'Unmute Notifications'
+                : 'Mute Notifications',
+            onPress: () =>
+              showMuteOptions(
+                chat
+              ),
+          },
+          {
+            text:
+              'Archive Conversation',
+            onPress: () =>
+              archiveConversation(
+                chat
+              ),
+          },
+          {
+            text:
+              chat.isGroup
+                ? 'Leave Group'
+                : 'Delete Chat',
+            style:
+              'destructive',
+            onPress: () =>
+              chat.isGroup
+                ? leaveGroup(
+                    chat
+                  )
+                : deleteDirectConversation(
+                    chat
+                  ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
+
+  const showNewChatMenu =
+    () => {
+      Alert.alert(
+        'New Conversation',
+        'What would you like to create?',
+        [
+          {
+            text:
+              'New Message',
+            onPress: () =>
+              router.push(
+                '/find-user'
+              ),
+          },
+          {
+            text:
+              'New Group',
+            onPress: () =>
+              router.push(
+                '/create-group'
+              ),
+          },
+          {
+            text:
+              'Cancel',
+            style:
+              'cancel',
+          },
+        ]
+      );
+    };
+
+  const openSearch =
+    () => {
+      router.push(
+        '/search-messages'
+      );
+    };
+
+  const openArchived =
+    () => {
+      router.push(
+        '/archived-chats'
+      );
+    };
+
+  const signOut =
+    async () => {
+      try {
+        const {
+          error,
+        } =
+          await supabase.auth.signOut();
+
+        if (error) {
+          Alert.alert(
+            'Unable to sign out',
+            error.message
+          );
+          return;
+        }
+
+        router.replace(
+          '/sign-up'
+        );
+      } catch (error) {
+        console.error(
+          'Sign out error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to sign out',
+          'Please try again.'
+        );
+      }
+    };
+
+  const resetDevelopmentState =
+    async () => {
+      try {
+        await SecureStore.deleteItemAsync(
+          ONBOARDING_KEY
+        );
+
+        await SecureStore.deleteItemAsync(
+          BIOMETRICS_KEY
+        );
+
+        await SecureStore.deleteItemAsync(
+          PIN_STORAGE_KEY
+        );
+
+        router.replace('/');
+      } catch (error) {
+        console.error(
+          'Reset error:',
+          error
+        );
+
+        Alert.alert(
+          'Reset failed',
+          'Project Delivered could not clear the local development state.'
+        );
+      }
+    };
+
+  const formatChatTime = (
+    timestamp:
+      string | null
+  ) => {
+    if (!timestamp) {
+      return '';
+    }
+
+    const date =
+      new Date(timestamp);
+
+    const now =
+      new Date();
+
+    const sameDay =
+      date.getFullYear() ===
+        now.getFullYear() &&
+      date.getMonth() ===
+        now.getMonth() &&
+      date.getDate() ===
+        now.getDate();
+
+    if (sameDay) {
+      return date.toLocaleTimeString(
+        [],
+        {
+          hour: 'numeric',
+          minute: '2-digit',
+        }
+      );
+    }
+
+    return date.toLocaleDateString(
+      [],
+      {
+        month: 'short',
+        day: 'numeric',
+      }
+    );
+  };
+
+  return (
+    <SafeAreaView
+      style={
+        styles.safeArea
+      }
+    >
+      <View
+        style={
+          styles.container
+        }
+      >
+        <View
+          style={
+            styles.header
+          }
+        >
+          <View>
+            <Text
+              style={
+                styles.eyebrow
+              }
+            >
+              PROJECT DELIVERED
+            </Text>
+
+            <Text
+              style={
+                styles.title
+              }
+            >
+              Chats
+            </Text>
+          </View>
+
+          <View
+            style={
+              styles.headerActions
+            }
+          >
+            <Pressable
+              style={
+                styles.searchButton
+              }
+              onPress={
+                openSearch
+              }
+            >
+              <Text
+                style={
+                  styles.searchIcon
+                }
+              >
+                ⌕
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={
+                styles.favouritesButton
+              }
+              onPress={() =>
+                router.push(
+                  '/favourites'
+                )
+              }
+            >
+              <Text
+                style={
+                  styles.favouritesText
+                }
+              >
+                ★
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={
+                styles.archivedButton
+              }
+              onPress={
+                openArchived
+              }
+            >
+              <Text
+                style={
+                  styles.archivedButtonText
+                }
+              >
+                ARCH
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={
+                styles.profileButton
+              }
+              onPress={() =>
+                router.push(
+                  '/profile'
+                )
+              }
+            >
+              {currentUserAvatarUrl ? (
+                <Image
+                  source={{
+                    uri:
+                      currentUserAvatarUrl,
+                  }}
+                  style={
+                    styles.profileButtonImage
+                  }
+                />
+              ) : (
+                <Text
+                  style={
+                    styles.profileButtonText
+                  }
+                >
+                  ME
+                </Text>
+              )}
+            </Pressable>
+
+            <Pressable
+              style={
+                styles.newChatButton
+              }
+              onPress={
+                showNewChatMenu
+              }
+            >
+              <Text
+                style={
+                  styles.newChatText
+                }
+              >
+                +
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <Text
+          style={
+            styles.sectionTitle
+          }
+        >
+          RECENT
+        </Text>
+
+        {loading ? (
+          <ActivityIndicator
+            size="large"
+            color="#4169E1"
+            style={
+              styles.loader
+            }
+          />
+        ) : chats.length ===
+          0 ? (
+          <View
+            style={
+              styles.emptyState
+            }
+          >
+            <Text
+              style={
+                styles.emptyTitle
+              }
+            >
+              No conversations yet
+            </Text>
+
+            <Text
+              style={
+                styles.emptyText
+              }
+            >
+              Tap the + button to start a message or create a group.
+            </Text>
+          </View>
+        ) : (
+          chats.map(
+            (chat) => (
+              <Pressable
+                key={chat.id}
+                style={
+                  styles.chat
+                }
+                onPress={() =>
+                  router.push({
+                    pathname:
+                      '/conversation',
+                    params: {
+                      conversationId:
+                        chat.id,
+                    },
+                  })
+                }
+                onLongPress={() =>
+                  showChatActions(
+                    chat
+                  )
+                }
+                delayLongPress={
+                  350
+                }
+              >
+                <View
+                  style={[
+                    styles.avatar,
+                    chat.isGroup &&
+                      styles.groupAvatar,
+                  ]}
+                >
+                  {chat.avatarUrl ? (
+                    <Image
+                      source={{
+                        uri:
+                          chat.avatarUrl,
+                      }}
+                      style={
+                        styles.avatarImage
+                      }
+                    />
+                  ) : (
+                    <Text
+                      style={
+                        styles.avatarText
+                      }
+                    >
+                      {chat.displayName
+                        .charAt(0)
+                        .toUpperCase()}
+                    </Text>
+                  )}
+                </View>
+
+                <View
+                  style={
+                    styles.chatContent
+                  }
+                >
+                  <View
+                    style={
+                      styles.chatTopRow
+                    }
+                  >
+                    <View
+                      style={
+                        styles.nameRow
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.name,
+                          chat.unreadCount >
+                            0 &&
+                            styles.unreadName,
+                        ]}
+                        numberOfLines={
+                          1
+                        }
+                      >
+                        {
+                          chat.displayName
+                        }
+                      </Text>
+
+                      {chat.isGroup && (
+                        <Text
+                          style={
+                            styles.groupLabel
+                          }
+                        >
+                          GROUP
+                        </Text>
+                      )}
+
+                      {chat.isPinned && (
+                        <Text
+                          style={
+                            styles.pinnedLabel
+                          }
+                        >
+                          PINNED
+                        </Text>
+                      )}
+
+                      {chat.isMuted && (
+                        <Text
+                          style={
+                            styles.mutedLabel
+                          }
+                        >
+                          MUTED
+                        </Text>
+                      )}
+                    </View>
+
+                    <View
+                      style={
+                        styles.rightColumn
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.time,
+                          chat.unreadCount >
+                            0 &&
+                            styles.unreadTime,
+                        ]}
+                      >
+                        {formatChatTime(
+                          chat.latestMessageAt
+                        )}
+                      </Text>
+
+                      {chat.unreadCount >
+                        0 && (
+                        <View
+                          style={
+                            styles.unreadBadge
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.unreadBadgeText
+                            }
+                          >
+                            {chat.unreadCount >
+                            99
+                              ? '99+'
+                              : chat.unreadCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  <Text
+                    style={[
+                      styles.preview,
+                      chat.unreadCount >
+                        0 &&
+                        styles.unreadPreview,
+                    ]}
+                    numberOfLines={
+                      1
+                    }
+                  >
+                    {
+                      chat.latestMessage
+                    }
+                  </Text>
+
+                  {chat.username && (
+                    <Text
+                      style={
+                        styles.username
+                      }
+                    >
+                      @{chat.username}
+                    </Text>
+                  )}
+                </View>
+              </Pressable>
+            )
+          )
+        )}
+
+        <View
+          style={
+            styles.developmentSection
+          }
+        >
+          <Text
+            style={
+              styles.developmentLabel
+            }
+          >
+            DEVELOPMENT
+          </Text>
+
+          <Pressable
+            style={
+              styles.devButton
+            }
+            onPress={
+              signOut
+            }
+          >
+            <Text
+              style={
+                styles.devButtonText
+              }
+            >
+              Sign Out
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={
+              styles.devButton
+            }
+            onPress={
+              resetDevelopmentState
+            }
+          >
+            <Text
+              style={
+                styles.devButtonText
+              }
+            >
+              Reset Onboarding
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles =
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor:
+        '#F7F8FA',
+    },
+
+    container: {
+      flex: 1,
+      paddingHorizontal:
+        22,
+      paddingTop: 20,
+    },
+
+    header: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      justifyContent:
+        'space-between',
+      marginBottom: 34,
+    },
+
+    headerActions: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+    },
+
+    eyebrow: {
+      fontSize: 12,
+      fontWeight: '700',
+      letterSpacing: 1.6,
+      color:
+        '#4169E1',
+      marginBottom: 6,
+    },
+
+    title: {
+      fontSize: 38,
+      fontWeight: '800',
+      color:
+        '#101828',
+    },
+
+    searchButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+    },
+
+    searchIcon: {
+      fontSize: 26,
+      lineHeight: 28,
+      color:
+        '#4169E1',
+      fontWeight: '600',
+    },
+
+    favouritesButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+    },
+
+    favouritesText: {
+      fontSize: 22,
+      color:
+        '#F79009',
+    },
+
+    archivedButton: {
+      width: 54,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+    },
+
+    archivedButtonText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      color:
+        '#667085',
+    },
+
+    profileButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#FFFFFF',
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 10,
+      overflow: 'hidden',
+    },
+
+    profileButtonImage: {
+      width: '100%',
+      height: '100%',
+    },
+
+    profileButtonText: {
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      color:
+        '#4169E1',
+    },
+
+    newChatButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        '#4169E1',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+    },
+
+    newChatText: {
+      color:
+        '#FFFFFF',
+      fontSize: 28,
+      lineHeight: 30,
+    },
+
+    sectionTitle: {
+      fontSize: 12,
+      fontWeight: '700',
+      letterSpacing: 1.4,
+      color:
+        '#98A2B3',
+      marginBottom: 12,
+    },
+
+    loader: {
+      marginTop: 40,
+    },
+
+    emptyState: {
+      paddingVertical: 40,
+      alignItems:
+        'center',
+    },
+
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color:
+        '#101828',
+      marginBottom: 8,
+    },
+
+    emptyText: {
+      fontSize: 15,
+      lineHeight: 22,
+      textAlign:
+        'center',
+      color:
+        '#667085',
+    },
+
+    chat: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor:
+        '#EAECF0',
+    },
+
+    avatar: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor:
+        '#E8ECFB',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginRight: 14,
+      overflow: 'hidden',
+    },
+
+    avatarImage: {
+      width: '100%',
+      height: '100%',
+    },
+
+    groupAvatar: {
+      backgroundColor:
+        '#EAF7EF',
+    },
+
+    avatarText: {
+      fontSize: 20,
+      fontWeight: '700',
+      color:
+        '#4169E1',
+    },
+
+    chatContent: {
+      flex: 1,
+    },
+
+    chatTopRow: {
+      flexDirection:
+        'row',
+      justifyContent:
+        'space-between',
+      alignItems:
+        'flex-start',
+      marginBottom: 4,
+    },
+
+    nameRow: {
+      flex: 1,
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      marginRight: 10,
+    },
+
+    name: {
+      flexShrink: 1,
+      fontSize: 17,
+      fontWeight: '700',
+      color:
+        '#101828',
+    },
+
+    unreadName: {
+      fontWeight: '800',
+    },
+
+    groupLabel: {
+      marginLeft: 8,
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      color:
+        '#027A48',
+      backgroundColor:
+        '#ECFDF3',
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
+
+    pinnedLabel: {
+      marginLeft: 8,
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      color:
+        '#6941C6',
+      backgroundColor:
+        '#F4F3FF',
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
+
+    mutedLabel: {
+      marginLeft: 8,
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      color:
+        '#667085',
+      backgroundColor:
+        '#F2F4F7',
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
+
+    rightColumn: {
+      alignItems:
+        'flex-end',
+    },
+
+    time: {
+      fontSize: 12,
+      color:
+        '#98A2B3',
+    },
+
+    unreadTime: {
+      color:
+        '#4169E1',
+      fontWeight: '700',
+    },
+
+    unreadBadge: {
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor:
+        '#4169E1',
+      paddingHorizontal: 6,
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginTop: 6,
+    },
+
+    unreadBadgeText: {
+      fontSize: 11,
+      fontWeight: '800',
+      color:
+        '#FFFFFF',
+    },
+
+    preview: {
+      fontSize: 15,
+      color:
+        '#667085',
+    },
+
+    unreadPreview: {
+      color:
+        '#344054',
+      fontWeight: '600',
+    },
+
+    username: {
+      marginTop: 4,
+      fontSize: 12,
+      color:
+        '#98A2B3',
+    },
+
+    developmentSection: {
+      marginTop: 'auto',
+      marginBottom: 30,
+      paddingTop: 20,
+      borderTopWidth: 1,
+      borderTopColor:
+        '#EAECF0',
+    },
+
+    developmentLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 1.4,
+      color:
+        '#98A2B3',
+      marginBottom: 10,
+    },
+
+    devButton: {
+      height: 48,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor:
+        '#D0D5DD',
+      backgroundColor:
+        '#FFFFFF',
+      alignItems:
+        'center',
+      justifyContent:
+        'center',
+      marginBottom: 10,
+    },
+
+    devButtonText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color:
+        '#344054',
+    },
+  });
