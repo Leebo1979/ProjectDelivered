@@ -1,19 +1,21 @@
+import * as ImagePicker from 'expo-image-picker';
 import {
-    router,
-    useFocusEffect,
-    useLocalSearchParams,
+  router,
+  useFocusEffect,
+  useLocalSearchParams,
 } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 
 import { supabase } from '../lib/supabase';
@@ -49,6 +51,25 @@ export default function GroupDetailsScreen() {
 
   const [isOwner, setIsOwner] =
     useState(false);
+
+  const [
+    groupAvatarPath,
+    setGroupAvatarPath,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
+    groupAvatarUrl,
+    setGroupAvatarUrl,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
+    updatingAvatar,
+    setUpdatingAvatar,
+  ] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -89,7 +110,7 @@ export default function GroupDetailsScreen() {
         } = await supabase
           .from('conversations')
           .select(
-            'title, created_by, is_group'
+            'title, created_by, is_group, avatar_path'
           )
           .eq(
             'id',
@@ -128,6 +149,44 @@ export default function GroupDetailsScreen() {
           conversation.created_by ===
             user.id
         );
+
+        setGroupAvatarPath(
+          conversation.avatar_path ??
+            null
+        );
+
+        if (
+          conversation.avatar_path
+        ) {
+          const {
+            data:
+              avatarData,
+            error:
+              avatarError,
+          } =
+            await supabase
+              .storage
+              .from(
+                'message-attachments'
+              )
+              .createSignedUrl(
+                conversation.avatar_path,
+                60 * 60
+              );
+
+          if (
+            !avatarError &&
+            avatarData
+          ) {
+            setGroupAvatarUrl(
+              avatarData.signedUrl
+            );
+          }
+        } else {
+          setGroupAvatarUrl(
+            null
+          );
+        }
 
         const {
           data: memberRows,
@@ -231,6 +290,197 @@ export default function GroupDetailsScreen() {
         );
       } finally {
         setLoading(false);
+      }
+    };
+
+  const chooseGroupPhoto =
+    async () => {
+      if (!isOwner) {
+        Alert.alert(
+          'Owner only',
+          'Only the group owner can change the group photo.'
+        );
+        return;
+      }
+
+      try {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+        if (
+          permission.status !==
+          'granted'
+        ) {
+          Alert.alert(
+            'Photo access required',
+            'Please allow photo library access to choose a group photo.'
+          );
+          return;
+        }
+
+        const result =
+          await ImagePicker.launchImageLibraryAsync({
+            mediaTypes:
+              ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.9,
+          });
+
+        if (
+          result.canceled
+        ) {
+          return;
+        }
+
+        const asset =
+          result.assets[0];
+
+        setUpdatingAvatar(
+          true
+        );
+
+        const extension =
+          (
+            asset.fileName
+              ?.split('.')
+              .pop() ??
+            'jpg'
+          )
+            .toLowerCase();
+
+        const path =
+          `group-avatars/${conversationId}/${Date.now()}.${extension}`;
+
+        const response =
+          await fetch(
+            asset.uri
+          );
+
+        const arrayBuffer =
+          await response.arrayBuffer();
+
+        const {
+          error:
+            uploadError,
+        } =
+          await supabase
+            .storage
+            .from(
+              'message-attachments'
+            )
+            .upload(
+              path,
+              arrayBuffer,
+              {
+                contentType:
+                  asset.mimeType ??
+                  'image/jpeg',
+                upsert: false,
+              }
+            );
+
+        if (
+          uploadError
+        ) {
+          Alert.alert(
+            'Unable to upload group photo',
+            uploadError.message
+          );
+          return;
+        }
+
+        const {
+          error:
+            updateError,
+        } = await supabase
+          .from(
+            'conversations'
+          )
+          .update({
+            avatar_path:
+              path,
+          })
+          .eq(
+            'id',
+            conversationId
+          );
+
+        if (
+          updateError
+        ) {
+          await supabase
+            .storage
+            .from(
+              'message-attachments'
+            )
+            .remove([
+              path,
+            ]);
+
+          Alert.alert(
+            'Unable to save group photo',
+            updateError.message
+          );
+          return;
+        }
+
+        if (
+          groupAvatarPath
+        ) {
+          await supabase
+            .storage
+            .from(
+              'message-attachments'
+            )
+            .remove([
+              groupAvatarPath,
+            ]);
+        }
+
+        const {
+          data:
+            signedData,
+          error:
+            signedError,
+        } =
+          await supabase
+            .storage
+            .from(
+              'message-attachments'
+            )
+            .createSignedUrl(
+              path,
+              60 * 60
+            );
+
+        setGroupAvatarPath(
+          path
+        );
+
+        if (
+          !signedError &&
+          signedData
+        ) {
+          setGroupAvatarUrl(
+            signedData.signedUrl
+          );
+        }
+      } catch (error: any) {
+        console.error(
+          'Group photo update error:',
+          error
+        );
+
+        Alert.alert(
+          'Unable to change group photo',
+          error?.message ??
+            'Please try again.'
+        );
+      } finally {
+        setUpdatingAvatar(
+          false
+        );
       }
     };
 
@@ -626,6 +876,60 @@ export default function GroupDetailsScreen() {
             </Text>
           </Pressable>
 
+          <Pressable
+            style={
+              styles.groupAvatarButton
+            }
+            onPress={
+              chooseGroupPhoto
+            }
+            disabled={
+              !isOwner ||
+              updatingAvatar
+            }
+          >
+            {groupAvatarUrl ? (
+              <Image
+                source={{
+                  uri:
+                    groupAvatarUrl,
+                }}
+                style={
+                  styles.groupAvatarImage
+                }
+              />
+            ) : (
+              <View
+                style={
+                  styles.groupAvatarFallback
+                }
+              >
+                <Text
+                  style={
+                    styles.groupAvatarFallbackText
+                  }
+                >
+                  {groupName
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
+              </View>
+            )}
+
+            {updatingAvatar && (
+              <View
+                style={
+                  styles.groupAvatarLoading
+                }
+              >
+                <ActivityIndicator
+                  size="small"
+                  color="#FFFFFF"
+                />
+              </View>
+            )}
+          </Pressable>
+
           <View
             style={
               styles.headerText
@@ -662,6 +966,27 @@ export default function GroupDetailsScreen() {
               styles.actions
             }
           >
+            <Pressable
+              style={
+                styles.actionButton
+              }
+              onPress={
+                chooseGroupPhoto
+              }
+              disabled={
+                updatingAvatar
+              }
+            >
+              <Text
+                style={
+                  styles.actionText
+                }
+              >
+                {groupAvatarUrl
+                  ? 'Change Photo'
+                  : 'Add Photo'}
+              </Text>
+            </Pressable>
             <Pressable
               style={
                 styles.actionButton
@@ -908,6 +1233,48 @@ const styles =
         '#4169E1',
     },
 
+    groupAvatarButton: {
+      width: 62,
+      height: 62,
+      borderRadius: 31,
+      marginRight: 12,
+      overflow: 'hidden',
+      backgroundColor:
+        '#E8ECFB',
+      position: 'relative',
+    },
+
+    groupAvatarImage: {
+      width: '100%',
+      height: '100%',
+    },
+
+    groupAvatarFallback: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      backgroundColor:
+        '#E8ECFB',
+    },
+
+    groupAvatarFallbackText: {
+      fontSize: 24,
+      fontWeight: '800',
+      color:
+        '#4169E1',
+    },
+
+    groupAvatarLoading: {
+      position: 'absolute',
+      inset: 0,
+      alignItems: 'center',
+      justifyContent:
+        'center',
+      backgroundColor:
+        'rgba(16,24,40,0.45)',
+    },
+
     headerText: {
       flex: 1,
     },
@@ -950,7 +1317,7 @@ const styles =
     },
 
     actionText: {
-      fontSize: 15,
+      fontSize: 13,
       fontWeight: '700',
       color:
         '#FFFFFF',

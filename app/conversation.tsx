@@ -438,6 +438,13 @@ export default function ConversationScreen() {
   const [isGroup, setIsGroup] =
     useState(false);
 
+  const [
+    groupAvatarUrl,
+    setGroupAvatarUrl,
+  ] = useState<string | null>(
+    null
+  );
+
   const [readMap, setReadMap] =
     useState<ReadMap>({});
 
@@ -1075,7 +1082,7 @@ export default function ConversationScreen() {
             'conversations'
           )
           .select(
-            'id, title, is_group'
+            'id, title, is_group, avatar_path'
           )
           .eq(
             'id',
@@ -1096,6 +1103,44 @@ export default function ConversationScreen() {
           setIsGroup(
             conversation.is_group
           );
+
+          if (
+            conversation.is_group &&
+            conversation.avatar_path
+          ) {
+            const {
+              data:
+                avatarData,
+              error:
+                avatarError,
+            } =
+              await supabase
+                .storage
+                .from(
+                  'message-attachments'
+                )
+                .createSignedUrl(
+                  conversation.avatar_path,
+                  60 * 60
+                );
+
+            if (
+              !avatarError &&
+              avatarData
+            ) {
+              setGroupAvatarUrl(
+                avatarData.signedUrl
+              );
+            } else {
+              setGroupAvatarUrl(
+                null
+              );
+            }
+          } else {
+            setGroupAvatarUrl(
+              null
+            );
+          }
 
           if (
             conversation.is_group
@@ -2927,15 +2972,28 @@ export default function ConversationScreen() {
                 styles.avatar
               }
             >
-              <Text
-                style={
-                  styles.avatarText
-                }
-              >
-                {conversationTitle
-                  .charAt(0)
-                  .toUpperCase()}
-              </Text>
+              {isGroup &&
+              groupAvatarUrl ? (
+                <Image
+                  source={{
+                    uri:
+                      groupAvatarUrl,
+                  }}
+                  style={
+                    styles.avatarImage
+                  }
+                />
+              ) : (
+                <Text
+                  style={
+                    styles.avatarText
+                  }
+                >
+                  {conversationTitle
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
+              )}
             </View>
 
             <View
@@ -4018,6 +4076,12 @@ const styles =
       justifyContent:
         'center',
       marginRight: 12,
+      overflow: 'hidden',
+    },
+
+    avatarImage: {
+      width: '100%',
+      height: '100%',
     },
 
     avatarText: {

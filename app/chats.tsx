@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -28,6 +29,7 @@ type ConversationRow = {
   title: string | null;
   is_group: boolean;
   created_at: string;
+  avatar_path: string | null;
 };
 
 type ChatListItem = {
@@ -40,6 +42,7 @@ type ChatListItem = {
   unreadCount: number;
   isMuted: boolean;
   isPinned: boolean;
+  avatarUrl: string | null;
 };
 
 export default function ChatsScreen() {
@@ -364,7 +367,7 @@ export default function ChatsScreen() {
       } = await supabase
         .from('conversations')
         .select(
-          'id, title, is_group, created_at'
+          'id, title, is_group, created_at, avatar_path'
         )
         .in(
           'id',
@@ -648,6 +651,39 @@ export default function ChatsScreen() {
               const latestMessage =
                 latestMessageRows?.[0];
 
+              let avatarUrl:
+                string | null =
+                null;
+
+              if (
+                conversation.is_group &&
+                conversation.avatar_path
+              ) {
+                const {
+                  data:
+                    avatarData,
+                  error:
+                    avatarError,
+                } =
+                  await supabase
+                    .storage
+                    .from(
+                      'message-attachments'
+                    )
+                    .createSignedUrl(
+                      conversation.avatar_path,
+                      60 * 60
+                    );
+
+                if (
+                  !avatarError &&
+                  avatarData
+                ) {
+                  avatarUrl =
+                    avatarData.signedUrl;
+                }
+              }
+
               const {
                 data:
                   incomingMessages,
@@ -761,6 +797,8 @@ export default function ChatsScreen() {
                   pinnedIds.has(
                     conversation.id
                   ),
+
+                avatarUrl,
               };
             }
           )
@@ -1794,15 +1832,28 @@ export default function ChatsScreen() {
                       styles.groupAvatar,
                   ]}
                 >
-                  <Text
-                    style={
-                      styles.avatarText
-                    }
-                  >
-                    {chat.displayName
-                      .charAt(0)
-                      .toUpperCase()}
-                  </Text>
+                  {chat.isGroup &&
+                  chat.avatarUrl ? (
+                    <Image
+                      source={{
+                        uri:
+                          chat.avatarUrl,
+                      }}
+                      style={
+                        styles.avatarImage
+                      }
+                    />
+                  ) : (
+                    <Text
+                      style={
+                        styles.avatarText
+                      }
+                    >
+                      {chat.displayName
+                        .charAt(0)
+                        .toUpperCase()}
+                    </Text>
+                  )}
                 </View>
 
                 <View
@@ -2185,6 +2236,12 @@ const styles =
       justifyContent:
         'center',
       marginRight: 14,
+      overflow: 'hidden',
+    },
+
+    avatarImage: {
+      width: '100%',
+      height: '100%',
     },
 
     groupAvatar: {
