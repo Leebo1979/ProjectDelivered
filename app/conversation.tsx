@@ -77,7 +77,7 @@ type PendingAttachment = {
   isImage: boolean;
 };
 
-type ReadMap = Record<string, boolean>;
+type ReadMap = Record<string, string[]>;
 type FavouriteMap = Record<string, boolean>;
 type ReactionMap = Record<string, string[]>;
 type SenderNameMap = Record<string, string>;
@@ -720,11 +720,29 @@ export default function ConversationScreen() {
               currentUserId
             ) {
               setReadMap(
-                (current) => ({
-                  ...current,
-                  [read.message_id]:
-                    true,
-                })
+                (current) => {
+                  const existing =
+                    current[
+                      read.message_id
+                    ] ?? [];
+
+                  if (
+                    existing.includes(
+                      read.user_id
+                    )
+                  ) {
+                    return current;
+                  }
+
+                  return {
+                    ...current,
+                    [read.message_id]:
+                      [
+                        ...existing,
+                        read.user_id,
+                      ],
+                  };
+                }
               );
             }
           }
@@ -1557,9 +1575,29 @@ export default function ConversationScreen() {
         const read
         of reads ?? []
       ) {
-        nextMap[
-          read.message_id
-        ] = true;
+        if (
+          !nextMap[
+            read.message_id
+          ]
+        ) {
+          nextMap[
+            read.message_id
+          ] = [];
+        }
+
+        if (
+          !nextMap[
+            read.message_id
+          ].includes(
+            read.user_id
+          )
+        ) {
+          nextMap[
+            read.message_id
+          ].push(
+            read.user_id
+          );
+        }
       }
 
       setReadMap(
@@ -2637,6 +2675,199 @@ export default function ConversationScreen() {
       );
     };
 
+  const showReadBy =
+    async (
+      item: Message
+    ) => {
+      if (
+        !isGroup ||
+        item.sender_id !==
+          currentUserId
+      ) {
+        return;
+      }
+
+      const readerIds =
+        readMap[
+          item.id
+        ] ?? [];
+
+      if (
+        readerIds.length === 0
+      ) {
+        Alert.alert(
+          'Read by',
+          'No one has read this message yet.'
+        );
+        return;
+      }
+
+      const {
+        data: profiles,
+        error,
+      } = await supabase
+        .from(
+          'profiles'
+        )
+        .select(
+          'id, display_name, username'
+        )
+        .in(
+          'id',
+          readerIds
+        );
+
+      if (error) {
+        Alert.alert(
+          'Unable to load readers',
+          error.message
+        );
+        return;
+      }
+
+      const names =
+        (profiles ?? [])
+          .map(
+            (profile) =>
+              profile.display_name ||
+              `@${profile.username}`
+          )
+          .sort(
+            (a, b) =>
+              a.localeCompare(b)
+          );
+
+      Alert.alert(
+        `Read by ${readerIds.length}`,
+        names.length > 0
+          ? names.join('\n')
+          : 'Reader details are unavailable.'
+      );
+    };
+
+  const showMessageInfo =
+    async (
+      item: Message
+    ) => {
+      if (
+        item.sender_id !==
+          currentUserId
+      ) {
+        return;
+      }
+
+      const readerIds =
+        readMap[
+          item.id
+        ] ?? [];
+
+      let readerNames:
+        string[] = [];
+
+      if (
+        readerIds.length > 0
+      ) {
+        const {
+          data: profiles,
+          error,
+        } = await supabase
+          .from(
+            'profiles'
+          )
+          .select(
+            'id, display_name, username'
+          )
+          .in(
+            'id',
+            readerIds
+          );
+
+        if (error) {
+          Alert.alert(
+            'Unable to load message info',
+            error.message
+          );
+          return;
+        }
+
+        const profileMap =
+          new Map(
+            (
+              profiles ??
+              []
+            ).map(
+              (
+                profile
+              ) => [
+                profile.id,
+                profile.display_name ||
+                  `@${profile.username}`,
+              ]
+            )
+          );
+
+        readerNames =
+          readerIds
+            .map(
+              (
+                userId
+              ) =>
+                profileMap.get(
+                  userId
+                ) ??
+                'Unknown user'
+            )
+            .sort(
+              (a, b) =>
+                a.localeCompare(
+                  b
+                )
+            );
+      }
+
+      const sentAt =
+        new Date(
+          item.created_at
+        ).toLocaleString(
+          [],
+          {
+            weekday:
+              'short',
+            day:
+              'numeric',
+            month:
+              'short',
+            year:
+              'numeric',
+            hour:
+              'numeric',
+            minute:
+              '2-digit',
+          }
+        );
+
+      const status =
+        readerIds.length > 0
+          ? isGroup
+            ? `Read by ${readerIds.length}`
+            : 'Read'
+          : 'Sent';
+
+      const readersText =
+        readerNames.length > 0
+          ? `\n\nRead by:\n${readerNames.join(
+              '\n'
+            )}`
+          : isGroup
+            ? '\n\nRead by:\nNo one yet'
+            : '';
+
+      Alert.alert(
+        'Message Info',
+        `Sent: ${sentAt}\nStatus: ${status}${readersText}`
+      );
+    };
+
   const showMessageActions =
     (
       item: Message
@@ -2700,6 +2931,15 @@ export default function ConversationScreen() {
         item.sender_id ===
         currentUserId
       ) {
+        actions.push({
+          text:
+            'Message Info',
+          onPress: () =>
+            showMessageInfo(
+              item
+            ),
+        });
+
         actions.push({
           text:
             'Edit',
@@ -3482,10 +3722,16 @@ export default function ConversationScreen() {
                 item.sender_id ===
                 currentUserId;
 
-              const isRead =
+              const readers =
                 readMap[
                   item.id
-                ];
+                ] ?? [];
+
+              const readCount =
+                readers.length;
+
+              const isRead =
+                readCount > 0;
 
               const parent =
                 findParentMessage(
@@ -3885,25 +4131,59 @@ export default function ConversationScreen() {
                         </Text>
                       )}
 
-                      <Text
-                        style={
-                          styles.timestamp
-                        }
-                      >
-                        {sentByMe
-                          ? isRead
-                            ? 'Read '
-                            : 'Sent '
-                          : ''}
+                      {sentByMe &&
+                      isGroup ? (
+                        <Pressable
+                          onPress={() =>
+                            showReadBy(
+                              item
+                            )
+                          }
+                          disabled={
+                            readCount === 0
+                          }
+                        >
+                          <Text
+                            style={[
+                              styles.timestamp,
+                              readCount > 0 &&
+                                styles.readStatusPressable,
+                            ]}
+                          >
+                            {readCount > 0
+                              ? `Read by ${readCount} `
+                              : 'Sent '}
 
-                        {formatTime(
-                          item.created_at
-                        )}
+                            {formatTime(
+                              item.created_at
+                            )}
 
-                        {item.edited_at
-                          ? ' · Edited'
-                          : ''}
-                      </Text>
+                            {item.edited_at
+                              ? ' · Edited'
+                              : ''}
+                          </Text>
+                        </Pressable>
+                      ) : (
+                        <Text
+                          style={
+                            styles.timestamp
+                          }
+                        >
+                          {sentByMe
+                            ? isRead
+                              ? 'Read '
+                              : 'Sent '
+                            : ''}
+
+                          {formatTime(
+                            item.created_at
+                          )}
+
+                          {item.edited_at
+                            ? ' · Edited'
+                            : ''}
+                        </Text>
+                      )}
                     </View>
                   </View>
                 </Pressable>
@@ -4886,6 +5166,11 @@ const styles =
       fontSize: 11,
       color: '#98A2B3',
       paddingHorizontal: 4,
+    },
+
+    readStatusPressable: {
+      color: '#4169E1',
+      fontWeight: '600',
     },
 
     replyingBar: {
