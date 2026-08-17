@@ -2915,6 +2915,94 @@ export default function ConversationScreen() {
         }
       );
 
+  const isSameMessageDate =
+    (
+      firstTimestamp: string,
+      secondTimestamp: string
+    ) => {
+      const first =
+        new Date(
+          firstTimestamp
+        );
+
+      const second =
+        new Date(
+          secondTimestamp
+        );
+
+      return (
+        first.getFullYear() ===
+          second.getFullYear() &&
+        first.getMonth() ===
+          second.getMonth() &&
+        first.getDate() ===
+          second.getDate()
+      );
+    };
+
+  const formatMessageDate =
+    (
+      timestamp: string
+    ) => {
+      const date =
+        new Date(
+          timestamp
+        );
+
+      const today =
+        new Date();
+
+      const yesterday =
+        new Date();
+
+      yesterday.setDate(
+        today.getDate() - 1
+      );
+
+      if (
+        isSameMessageDate(
+          timestamp,
+          today.toISOString()
+        )
+      ) {
+        return 'Today';
+      }
+
+      if (
+        isSameMessageDate(
+          timestamp,
+          yesterday.toISOString()
+        )
+      ) {
+        return 'Yesterday';
+      }
+
+      const sameYear =
+        date.getFullYear() ===
+        today.getFullYear();
+
+      return date.toLocaleDateString(
+        [],
+        sameYear
+          ? {
+              weekday:
+                'long',
+              day:
+                'numeric',
+              month:
+                'long',
+            }
+          : {
+              day:
+                'numeric',
+              month:
+                'long',
+              year:
+                'numeric',
+            }
+      );
+    };
+
   return (
     <SafeAreaView
       style={
@@ -3095,7 +3183,22 @@ export default function ConversationScreen() {
             }
             renderItem={({
               item,
+              index,
             }) => {
+              const previousMessage =
+                index > 0
+                  ? messages[
+                      index - 1
+                    ]
+                  : null;
+
+              const showDateSeparator =
+                !previousMessage ||
+                !isSameMessageDate(
+                  previousMessage.created_at,
+                  item.created_at
+                );
+
               const sentByMe =
                 item.sender_id ===
                 currentUserId;
@@ -3178,7 +3281,38 @@ export default function ConversationScreen() {
                 );
 
               return (
-                <Pressable
+                <>
+                  {showDateSeparator && (
+                    <View
+                      style={
+                        styles.dateSeparator
+                      }
+                    >
+                      <View
+                        style={
+                          styles.dateSeparatorLine
+                        }
+                      />
+
+                      <Text
+                        style={
+                          styles.dateSeparatorText
+                        }
+                      >
+                        {formatMessageDate(
+                          item.created_at
+                        )}
+                      </Text>
+
+                      <View
+                        style={
+                          styles.dateSeparatorLine
+                        }
+                      />
+                    </View>
+                  )}
+
+                  <Pressable
                   onLongPress={() =>
                     showMessageActions(
                       item
@@ -3494,6 +3628,7 @@ export default function ConversationScreen() {
                     </View>
                   </View>
                 </Pressable>
+                </>
               );
             }}
           />
@@ -4131,6 +4266,30 @@ const styles =
       alignItems: 'center',
       justifyContent:
         'center',
+    },
+
+    dateSeparator: {
+      flexDirection:
+        'row',
+      alignItems:
+        'center',
+      marginVertical: 16,
+      paddingHorizontal: 4,
+    },
+
+    dateSeparatorLine: {
+      flex: 1,
+      height: 1,
+      backgroundColor:
+        '#EAECF0',
+    },
+
+    dateSeparatorText: {
+      marginHorizontal: 12,
+      fontSize: 12,
+      fontWeight: '700',
+      color:
+        '#667085',
     },
 
     messageList: {
